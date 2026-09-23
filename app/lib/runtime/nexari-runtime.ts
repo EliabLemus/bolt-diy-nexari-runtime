@@ -22,9 +22,13 @@ export interface NexariGuestProcess {
   kill(): void;
 }
 
+export interface NexariGuestSpawnOptions {
+  signal?: AbortSignal;
+}
+
 export interface NexariGuestRuntime {
   fs: NexariGuestFileSystem;
-  spawn(command: string, args?: string[]): Promise<NexariGuestProcess>;
+  spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess>;
   teardown(): Promise<void>;
 }
 
@@ -55,6 +59,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
   #guest: NexariGuestRuntime | undefined;
   #bootPromise: Promise<void> | undefined;
   #teardownPromise: Promise<void> | undefined;
+  #activeActionCancels = new Set<(reason: unknown) => void>();
   #state: NexariRuntimeState = 'created';
 
   readonly fs: NexariGuestFileSystem = {
@@ -111,34 +116,46 @@ class NexariRuntimeAdapter implements NexariRuntime {
       throw signal.reason;
     }
 
-    const process = await this.#guest!.spawn(command, args);
-
-    if (this.#state !== 'ready') {
-      process.kill();
-      throw new NexariRuntimeTerminatedError();
-    }
-
-    if (signal?.aborted) {
-      process.kill();
-      throw signal.reason;
-    }
-
+    const spawnController = new AbortController();
+    let process: NexariGuestProcess | undefined;
     let killed = false;
     let rejectCancellation!: (reason: unknown) => void;
     const cancellation = new Promise<never>((_resolve, reject) => {
       rejectCancellation = reject;
     });
-    const cancel = () => {
+    const cancel = (reason: unknown) => {
       if (!killed) {
         killed = true;
-        process.kill();
+        spawnController.abort(reason);
+        process?.kill();
       }
 
-      rejectCancellation(signal?.reason);
+      rejectCancellation(reason);
     };
-    signal?.addEventListener('abort', cancel, { once: true });
+    const abort = () => cancel(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    this.#activeActionCancels.add(cancel);
 
     try {
+      if (signal?.aborted) {
+        cancel(signal.reason);
+      }
+
+      const spawnedProcess = this.#guest!.spawn(command, args, { signal: spawnController.signal }).then(
+        (lateProcess) => {
+          if (killed || this.#state !== 'ready') {
+            lateProcess.kill();
+          }
+
+          return lateProcess;
+        },
+      );
+      process = await Promise.race([spawnedProcess, cancellation]);
+
+      if (this.#state !== 'ready') {
+        cancel(new NexariRuntimeTerminatedError());
+      }
+
       const [stdout, stderr, exitCode] = await Promise.race([
         Promise.all([readStream(process.stdout), readStream(process.stderr), process.exit]),
         cancellation,
@@ -151,7 +168,8 @@ class NexariRuntimeAdapter implements NexariRuntime {
 
       return { stdout, stderr, exitCode };
     } finally {
-      signal?.removeEventListener('abort', cancel);
+      signal?.removeEventListener('abort', abort);
+      this.#activeActionCancels.delete(cancel);
     }
   }
 
@@ -165,6 +183,13 @@ class NexariRuntimeAdapter implements NexariRuntime {
     }
 
     this.#state = 'terminated';
+
+    const terminated = new NexariRuntimeTerminatedError();
+
+    for (const cancel of this.#activeActionCancels) {
+      cancel(terminated);
+    }
+
     this.#teardownPromise = this.#guest?.teardown() ?? Promise.resolve();
 
     return this.#teardownPromise;

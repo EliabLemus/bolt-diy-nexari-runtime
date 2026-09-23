@@ -78,7 +78,7 @@ describe('createNexariRuntime', () => {
       stderr: 'stderr',
       exitCode: 17,
     });
-    expect(guest.spawn).toHaveBeenCalledWith('npm', ['run', 'build']);
+    expect(guest.spawn).toHaveBeenCalledWith('npm', ['run', 'build'], { signal: expect.any(AbortSignal) });
   });
 
   it('cancels only the action process and leaves the guest runtime ready', async () => {
@@ -115,6 +115,41 @@ describe('createNexariRuntime', () => {
     await expect(command).rejects.toBe(controller.signal.reason);
     expect(process.kill).toHaveBeenCalledOnce();
     expect(runtime.state).toBe('ready');
+  });
+
+  it('cancels an action waiting to spawn when teardown begins, then kills its late process', async () => {
+    const { guest, process } = createGuest();
+    const spawn = deferred<NexariGuestProcess>();
+
+    vi.mocked(guest.spawn).mockReturnValueOnce(spawn.promise);
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
+    await runtime.boot();
+
+    const command = runtime.runActionCommand('npm', ['run', 'build']);
+    await runtime.teardown();
+
+    await expect(command).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+    spawn.resolve(process);
+    await new Promise(setImmediate);
+    expect(process.kill).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an active action immediately when teardown begins', async () => {
+    const { guest, process } = createGuest();
+    const exit = deferred<number>();
+
+    process.exit = exit.promise;
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
+    await runtime.boot();
+
+    const command = runtime.runActionCommand('npm', ['run', 'build']);
+    await new Promise(setImmediate);
+    await runtime.teardown();
+
+    await expect(command).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+    expect(process.kill).toHaveBeenCalledOnce();
   });
 
   it('rejects a guest result that resolves after teardown and prevents future guest calls', async () => {
