@@ -46,7 +46,7 @@ export interface NexariRuntime {
   readonly state: NexariRuntimeState;
   readonly fs: NexariGuestFileSystem;
   boot(): Promise<void>;
-  runActionCommand(command: string, args?: string[], signal?: AbortSignal): Promise<NexariActionCommandResult>;
+  runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
   teardown(): Promise<void>;
 }
 
@@ -105,11 +105,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
     return this.#bootPromise;
   }
 
-  async runActionCommand(
-    command: string,
-    args: string[] = [],
-    signal?: AbortSignal,
-  ): Promise<NexariActionCommandResult> {
+  async runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult> {
     this.#assertReady();
 
     if (signal?.aborted) {
@@ -141,7 +137,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
         cancel(signal.reason);
       }
 
-      const spawnedProcess = this.#guest!.spawn(command, args, { signal: spawnController.signal }).then(
+      const spawnedProcess = this.#guest!.spawn('sh', ['-c', command], { signal: spawnController.signal }).then(
         (lateProcess) => {
           if (killed || this.#state !== 'ready') {
             lateProcess.kill();

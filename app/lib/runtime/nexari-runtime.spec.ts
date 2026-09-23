@@ -73,12 +73,15 @@ describe('createNexariRuntime', () => {
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 
-    await expect(runtime.runActionCommand('npm', ['run', 'build'])).resolves.toEqual({
+    await expect(runtime.runActionCommand('npm run build')).resolves.toEqual({
       stdout: 'stdout',
       stderr: 'stderr',
       exitCode: 17,
     });
-    expect(guest.spawn).toHaveBeenCalledWith('npm', ['run', 'build'], { signal: expect.any(AbortSignal) });
+    expect(guest.spawn).toHaveBeenCalledOnce();
+    expect(guest.spawn).toHaveBeenCalledWith('sh', ['-c', 'npm run build'], {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it('cancels only the action process and leaves the guest runtime ready', async () => {
@@ -90,7 +93,7 @@ describe('createNexariRuntime', () => {
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 
-    const command = runtime.runActionCommand('npm', ['run', 'build'], controller.signal);
+    const command = runtime.runActionCommand('npm run build', controller.signal);
     controller.abort();
 
     await expect(command).rejects.toBe(controller.signal.reason);
@@ -108,7 +111,7 @@ describe('createNexariRuntime', () => {
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 
-    const command = runtime.runActionCommand('npm', ['run', 'build'], controller.signal);
+    const command = runtime.runActionCommand('npm run build', controller.signal);
     await new Promise(setImmediate);
     controller.abort();
 
@@ -126,7 +129,7 @@ describe('createNexariRuntime', () => {
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 
-    const command = runtime.runActionCommand('npm', ['run', 'build']);
+    const command = runtime.runActionCommand('npm run build');
     await runtime.teardown();
 
     await expect(command).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
@@ -144,7 +147,7 @@ describe('createNexariRuntime', () => {
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 
-    const command = runtime.runActionCommand('npm', ['run', 'build']);
+    const command = runtime.runActionCommand('npm run build');
     await new Promise(setImmediate);
     await runtime.teardown();
 
