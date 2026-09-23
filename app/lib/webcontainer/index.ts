@@ -1,10 +1,14 @@
-import { WebContainer } from '@webcontainer/api';
-import { WORK_DIR_NAME } from '~/utils/constants';
+import type { WebContainer } from '@webcontainer/api';
 import { cleanStackTrace } from '~/utils/stacktrace';
+import { createBrowserRuntime } from '~/lib/runtime/browser-runtime';
+import { configuredRuntimeBackend, type RuntimeBackend } from '~/lib/runtime/runtime-selector';
 
 interface WebContainerContext {
   loaded: boolean;
+  backend?: RuntimeBackend;
 }
+
+const runtimeBackend = configuredRuntimeBackend();
 
 export const webcontainerContext: WebContainerContext = import.meta.hot?.data.webcontainerContext ?? {
   loaded: false,
@@ -19,18 +23,27 @@ export let webcontainer: Promise<WebContainer> = new Promise(() => {
 });
 
 if (!import.meta.env.SSR) {
+  const cachedRuntime =
+    import.meta.hot?.data.webcontainerContext?.backend === runtimeBackend
+      ? import.meta.hot.data.webcontainer
+      : undefined;
+
+  if (!cachedRuntime) {
+    /*
+     * A backend change or failed prior boot cannot retain readiness from the
+     * previous runtime. Consumers must observe the pending/new runtime instead.
+     */
+    webcontainerContext.loaded = false;
+    webcontainerContext.backend = undefined;
+  }
+
   webcontainer =
-    import.meta.hot?.data.webcontainer ??
+    cachedRuntime ??
     Promise.resolve()
-      .then(() => {
-        return WebContainer.boot({
-          coep: 'credentialless',
-          workdirName: WORK_DIR_NAME,
-          forwardPreviewErrors: true, // Enable error forwarding from iframes
-        });
-      })
+      .then(() => createBrowserRuntime(runtimeBackend))
       .then(async (webcontainer) => {
         webcontainerContext.loaded = true;
+        webcontainerContext.backend = runtimeBackend;
 
         const { workbenchStore } = await import('~/lib/stores/workbench');
 
