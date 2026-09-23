@@ -152,6 +152,24 @@ describe('createNexariRuntime', () => {
     expect(process.kill).toHaveBeenCalledOnce();
   });
 
+  it('contains a guest teardown rejection when boot resolves after teardown', async () => {
+    const { guest } = createGuest();
+    const boot = deferred<NexariGuestRuntime>();
+    const teardownFailure = new Error('guest teardown failed');
+    vi.mocked(guest.teardown).mockRejectedValueOnce(teardownFailure);
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockReturnValue(boot.promise) });
+
+    const booting = runtime.boot();
+    await runtime.teardown();
+    boot.resolve(guest);
+
+    await expect(booting).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+
+    await new Promise(setImmediate);
+    expect(guest.teardown).toHaveBeenCalledOnce();
+  });
+
   it('rejects a guest result that resolves after teardown and prevents future guest calls', async () => {
     const { guest } = createGuest();
     const pendingRead = deferred<string>();

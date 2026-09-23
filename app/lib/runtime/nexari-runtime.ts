@@ -89,7 +89,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
     this.#bootPromise = this.#bootGuest().then(
       (guest) => {
         if (this.#state === 'terminated') {
-          void guest.teardown();
+          void guest.teardown().catch(() => undefined);
           throw new NexariRuntimeTerminatedError();
         }
 
