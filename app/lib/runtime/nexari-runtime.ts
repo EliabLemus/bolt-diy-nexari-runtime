@@ -46,6 +46,7 @@ export interface NexariRuntime {
   readonly state: NexariRuntimeState;
   readonly fs: NexariGuestFileSystem;
   boot(): Promise<void>;
+  spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
   teardown(): Promise<void>;
 }
@@ -103,6 +104,12 @@ class NexariRuntimeAdapter implements NexariRuntime {
     );
 
     return this.#bootPromise;
+  }
+
+  spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess> {
+    this.#assertReady();
+
+    return this.#guest!.spawn(command, args, options);
   }
 
   async runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult> {

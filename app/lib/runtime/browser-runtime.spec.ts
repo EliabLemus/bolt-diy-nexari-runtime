@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebContainer } from '@webcontainer/api';
-import { RuntimeBackendUnavailableError, createBrowserRuntime } from './browser-runtime';
+import { NexariBootNotConfiguredError, createBrowserRuntime } from './browser-runtime';
 
 describe('createBrowserRuntime', () => {
   it('delegates the StackBlitz control path to its bootstrapper', async () => {
@@ -11,11 +11,11 @@ describe('createBrowserRuntime', () => {
     expect(bootStackblitz).toHaveBeenCalledOnce();
   });
 
-  it('fails closed when Nexari is selected before its adapter is wired', async () => {
+  it('fails closed with a typed error when nexari is selected without a guest boot', async () => {
     const bootStackblitz = vi.fn();
 
     await expect(createBrowserRuntime('nexari', { bootStackblitz })).rejects.toBeInstanceOf(
-      RuntimeBackendUnavailableError,
+      NexariBootNotConfiguredError,
     );
     expect(bootStackblitz).not.toHaveBeenCalled();
   });
