@@ -1,7 +1,7 @@
 import type { WebContainer } from '@webcontainer/api';
-import { cleanStackTrace } from '~/utils/stacktrace';
 import { createBrowserRuntime } from '~/lib/runtime/browser-runtime';
 import { configuredRuntimeBackend, type RuntimeBackend } from '~/lib/runtime/runtime-selector';
+import { wireStackblitzPreview } from '~/lib/webcontainer/preview-wiring';
 
 interface WebContainerContext {
   loaded: boolean;
@@ -45,29 +45,14 @@ if (!import.meta.env.SSR) {
         webcontainerContext.loaded = true;
         webcontainerContext.backend = runtimeBackend;
 
-        const { workbenchStore } = await import('~/lib/stores/workbench');
-
-        const response = await fetch('/inspector-script.js');
-        const inspectorScript = await response.text();
-        await webcontainer.setPreviewScript(inspectorScript);
-
-        // Listen for preview errors
-        webcontainer.on('preview-message', (message) => {
-          console.log('WebContainer preview message:', message);
-
-          // Handle both uncaught exceptions and unhandled promise rejections
-          if (message.type === 'PREVIEW_UNCAUGHT_EXCEPTION' || message.type === 'PREVIEW_UNHANDLED_REJECTION') {
-            const isPromise = message.type === 'PREVIEW_UNHANDLED_REJECTION';
-            const title = isPromise ? 'Unhandled Promise Rejection' : 'Uncaught Exception';
-            workbenchStore.actionAlert.set({
-              type: 'preview',
-              title,
-              description: 'message' in message ? message.message : 'Unknown error',
-              content: `Error occurred at ${message.pathname}${message.search}${message.hash}\nPort: ${message.port}\n\nStack trace:\n${cleanStackTrace(message.stack || '')}`,
-              source: 'preview',
-            });
-          }
-        });
+        /*
+         * Preview script injection and preview error events are StackBlitz
+         * capabilities. The nexari facade rejects them, so the nexari path
+         * skips this wiring entirely instead of failing boot on a refusal.
+         */
+        if (runtimeBackend === 'stackblitz') {
+          await wireStackblitzPreview(webcontainer);
+        }
 
         return webcontainer;
       });
