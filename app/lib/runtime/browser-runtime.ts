@@ -1,4 +1,4 @@
-import { WebContainer, type WebContainer as WebContainerInstance } from '@webcontainer/api';
+import type { WebContainer as WebContainerInstance } from '@webcontainer/api';
 import { WORK_DIR_NAME } from '~/utils/constants';
 import type { RuntimeBackend } from './runtime-selector';
 import type { NexariRuntime } from './nexari-runtime';
@@ -24,12 +24,19 @@ export interface BrowserRuntimeBootstrapDependencies {
 }
 
 const productionDependencies: BrowserRuntimeBootstrapDependencies = {
-  bootStackblitz: () =>
-    WebContainer.boot({
+  /*
+   * Loaded lazily so selecting `nexari` never downloads/loads the WebContainer
+   * SDK (Delta 003 acceptance: the nexari path contains no SDK import).
+   */
+  bootStackblitz: async () => {
+    const webcontainerModule = await import('@webcontainer/api');
+
+    return webcontainerModule.WebContainer.boot({
       coep: 'credentialless',
       workdirName: WORK_DIR_NAME,
       forwardPreviewErrors: true,
-    }),
+    });
+  },
 };
 
 /**
