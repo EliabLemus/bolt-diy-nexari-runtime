@@ -1,10 +1,5 @@
 import { WORK_DIR } from '~/utils/constants';
-import type {
-  NexariActionCommandResult,
-  NexariGuestFileSystem,
-  NexariRuntime,
-  NexariRuntimeState,
-} from './nexari-runtime';
+import type { NexariActionCommandResult, NexariRuntime, NexariRuntimeState } from './nexari-runtime';
 
 /**
  * Typed, visible refusal for a capability that exists on the WebContainer
@@ -15,6 +10,38 @@ export class NexariUnsupportedCapabilityError extends Error {
     super(`The nexari runtime does not support ${capability} in this build yet.`);
     this.name = 'NexariUnsupportedCapabilityError';
   }
+}
+
+export type NexariFsEncoding = 'utf8' | 'utf-8';
+
+export interface NexariFsEncodingOptions {
+  encoding?: NexariFsEncoding;
+}
+
+export interface NexariReaddirOptions {
+  /**
+   * Dirent-bearing reads are a later slice. The type admits `false` (and an
+   * absent key) while the facade rejects every other shape with a typed error.
+   */
+  withFileTypes?: false;
+}
+
+/**
+ * WebContainer-shaped filesystem surface exposed by the facade. Call shapes
+ * the nexari guest cannot honor (non-UTF-8 encodings, dirent reads, unknown
+ * option keys) are rejected at this edge with typed errors instead of being
+ * silently dropped by a narrower adapter signature.
+ */
+export interface NexariBrowserFileSystem {
+  readFile(path: string, encoding?: NexariFsEncoding): Promise<Uint8Array | string>;
+  writeFile(
+    path: string,
+    contents: Uint8Array | string,
+    encoding?: NexariFsEncoding | NexariFsEncodingOptions,
+  ): Promise<void>;
+  readdir(path: string, options?: NexariReaddirOptions): Promise<string[]>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
 }
 
 /**
@@ -61,7 +88,7 @@ export interface NexariBrowserRuntimeInternal {
 export interface NexariBrowserRuntime {
   readonly state: NexariRuntimeState;
   readonly workdir: string;
-  readonly fs: NexariGuestFileSystem;
+  readonly fs: NexariBrowserFileSystem;
   boot(): Promise<void>;
   spawn(command: string, args?: string[], options?: NexariSpawnOptions): Promise<NexariBrowserProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
@@ -92,6 +119,90 @@ function rejectSpawnOptions(options: NexariSpawnOptions | undefined): void {
 
   if (unsupported.length > 0) {
     throw new NexariUnsupportedCapabilityError(`spawn options (${unsupported.join(', ')})`);
+  }
+}
+
+const supportedEncodings: readonly string[] = ['utf8', 'utf-8'];
+
+function assertReadEncoding(encoding: string | undefined): void {
+  if (encoding !== undefined && !supportedEncodings.includes(encoding)) {
+    throw new NexariUnsupportedCapabilityError(`fs.readFile encoding (${encoding})`);
+  }
+}
+
+function resolveWriteEncoding(encoding: NexariFsEncoding | NexariFsEncodingOptions | undefined): void {
+  if (encoding === undefined) {
+    return;
+  }
+
+  if (typeof encoding === 'string') {
+    if (!supportedEncodings.includes(encoding)) {
+      throw new NexariUnsupportedCapabilityError(`fs.writeFile encoding (${encoding})`);
+    }
+
+    return;
+  }
+
+  for (const key of Object.keys(encoding)) {
+    if (key !== 'encoding') {
+      throw new NexariUnsupportedCapabilityError(`fs.writeFile options key (${key})`);
+    }
+  }
+
+  if (encoding.encoding !== undefined && !supportedEncodings.includes(encoding.encoding)) {
+    throw new NexariUnsupportedCapabilityError(`fs.writeFile encoding (${String(encoding.encoding)})`);
+  }
+}
+
+function assertReaddirOptions(options: NexariReaddirOptions | undefined): void {
+  if (options === undefined) {
+    return;
+  }
+
+  for (const key of Object.keys(options)) {
+    if (key !== 'withFileTypes') {
+      throw new NexariUnsupportedCapabilityError(`fs.readdir options key (${key})`);
+    }
+  }
+
+  if (options.withFileTypes !== undefined && options.withFileTypes !== false) {
+    throw new NexariUnsupportedCapabilityError('fs.readdir withFileTypes (dirent mapping)');
+  }
+}
+
+function assertMkdirOptions(options: { recursive?: boolean } | undefined): void {
+  if (options === undefined) {
+    return;
+  }
+
+  for (const key of Object.keys(options)) {
+    if (key !== 'recursive') {
+      throw new NexariUnsupportedCapabilityError(`fs.mkdir options key (${key})`);
+    }
+  }
+
+  if (options.recursive !== undefined && typeof options.recursive !== 'boolean') {
+    throw new NexariUnsupportedCapabilityError('fs.mkdir recursive (must be boolean)');
+  }
+}
+
+function assertRmOptions(options: { recursive?: boolean; force?: boolean } | undefined): void {
+  if (options === undefined) {
+    return;
+  }
+
+  for (const key of Object.keys(options)) {
+    if (key !== 'recursive' && key !== 'force') {
+      throw new NexariUnsupportedCapabilityError(`fs.rm options key (${key})`);
+    }
+  }
+
+  if (options.recursive !== undefined && typeof options.recursive !== 'boolean') {
+    throw new NexariUnsupportedCapabilityError('fs.rm recursive (must be boolean)');
+  }
+
+  if (options.force !== undefined && typeof options.force !== 'boolean') {
+    throw new NexariUnsupportedCapabilityError('fs.rm force (must be boolean)');
   }
 }
 
@@ -149,7 +260,33 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
       return runtime.state;
     },
     workdir: WORK_DIR,
-    fs: runtime.fs,
+    fs: {
+      readFile: async (path, encoding) => {
+        assertReadEncoding(encoding);
+
+        return runtime.fs.readFile(path, encoding);
+      },
+      writeFile: async (path, contents, encoding) => {
+        resolveWriteEncoding(encoding);
+
+        return runtime.fs.writeFile(path, contents);
+      },
+      readdir: async (path, options) => {
+        assertReaddirOptions(options);
+
+        return runtime.fs.readdir(path);
+      },
+      mkdir: async (path, options) => {
+        assertMkdirOptions(options);
+
+        return runtime.fs.mkdir(path, options);
+      },
+      rm: async (path, options) => {
+        assertRmOptions(options);
+
+        return runtime.fs.rm(path, options);
+      },
+    },
     boot: () => runtime.boot(),
     teardown: () => runtime.teardown(),
     runActionCommand: (command, signal) => runtime.runActionCommand(command, signal),

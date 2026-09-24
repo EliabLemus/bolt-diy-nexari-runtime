@@ -4,8 +4,31 @@ import {
   NexariUnsupportedCapabilityError,
   createNexariBrowserRuntime,
   type NexariBrowserRuntime,
+  type NexariFsEncoding,
 } from './nexari-runtime-facade';
 import { createNexariBrowserRuntimeBackend } from './browser-runtime';
+
+/** Compile-time-invalid call shapes must still be testable at runtime. */
+const invalidEncoding = (value: string) => value as unknown as NexariFsEncoding;
+
+function createSpiedGuest(): NexariGuestRuntime {
+  return {
+    fs: {
+      readFile: vi.fn().mockResolvedValue('contents'),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readdir: vi.fn().mockResolvedValue(['entry']),
+      mkdir: vi.fn().mockResolvedValue(undefined),
+      rm: vi.fn().mockResolvedValue(undefined),
+    },
+    spawn: vi.fn().mockResolvedValue({
+      stdout: new ReadableStream<string>({ start: (controller) => controller.close() }),
+      stderr: new ReadableStream<string>({ start: (controller) => controller.close() }),
+      exit: Promise.resolve(0),
+      kill: () => undefined,
+    }),
+    teardown: vi.fn().mockResolvedValue(undefined),
+  };
+}
 
 function createSyntheticGuest(): NexariGuestRuntime {
   const files = new Map<string, Uint8Array | string>();
@@ -153,6 +176,102 @@ describe('createNexariBrowserRuntime', () => {
       NexariUnsupportedCapabilityError,
     );
     await expect(facade.setPreviewScript('<script></script>')).rejects.toBeInstanceOf(NexariUnsupportedCapabilityError);
+  });
+
+  describe('fs option-shape guards', () => {
+    it('accepts supported writeFile encodings and forwards the call unchanged', async () => {
+      const guest = createSpiedGuest();
+      const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+      const facade = createNexariBrowserRuntime(runtime);
+      await facade.boot();
+
+      await facade.fs.writeFile('a.txt', 'text');
+      await facade.fs.writeFile('b.txt', new Uint8Array([1]), { encoding: 'utf8' });
+      await facade.fs.writeFile('c.txt', 'text', 'utf-8');
+      await facade.fs.writeFile('d.txt', 'text', {});
+      await facade.fs.writeFile('e.txt', new Uint8Array([2]), { encoding: undefined });
+
+      expect(guest.fs.writeFile).toHaveBeenCalledWith('a.txt', 'text');
+      expect(guest.fs.writeFile).toHaveBeenCalledWith('b.txt', new Uint8Array([1]));
+      expect(guest.fs.writeFile).toHaveBeenCalledWith('c.txt', 'text');
+      expect(guest.fs.writeFile).toHaveBeenCalledWith('d.txt', 'text');
+      expect(guest.fs.writeFile).toHaveBeenCalledWith('e.txt', new Uint8Array([2]));
+      expect(guest.fs.writeFile).toHaveBeenCalledTimes(5);
+    });
+
+    it('fails typed on unsupported writeFile encodings before reaching the guest', async () => {
+      const guest = createSpiedGuest();
+      const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+      const facade = createNexariBrowserRuntime(runtime);
+      await facade.boot();
+
+      await expect(facade.fs.writeFile('a.txt', 'text', invalidEncoding('base64'))).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      await expect(
+        facade.fs.writeFile('a.txt', 'text', { encoding: invalidEncoding('latin1') }),
+      ).rejects.toBeInstanceOf(NexariUnsupportedCapabilityError);
+      expect(guest.fs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it('accepts supported readFile encodings and fails typed on unsupported ones', async () => {
+      const guest = createSpiedGuest();
+      const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+      const facade = createNexariBrowserRuntime(runtime);
+      await facade.boot();
+
+      await expect(facade.fs.readFile('a.txt')).resolves.toBe('contents');
+      await expect(facade.fs.readFile('a.txt', 'utf8')).resolves.toBe('contents');
+      await expect(facade.fs.readFile('a.txt', 'utf-8')).resolves.toBe('contents');
+      await expect(facade.fs.readFile('a.txt', invalidEncoding('base64'))).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      expect(guest.fs.readFile).toHaveBeenCalledTimes(3);
+      expect(guest.fs.readFile).toHaveBeenNthCalledWith(3, 'a.txt', 'utf-8');
+    });
+
+    it('accepts plain readdir and fails typed on withFileTypes until dirent mapping exists', async () => {
+      const guest = createSpiedGuest();
+      const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+      const facade = createNexariBrowserRuntime(runtime);
+      await facade.boot();
+
+      await expect(facade.fs.readdir('.')).resolves.toEqual(['entry']);
+      await expect(facade.fs.readdir('.', {})).resolves.toEqual(['entry']);
+      await expect(facade.fs.readdir('.', { withFileTypes: true } as never)).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      await expect(facade.fs.readdir('.', { unknown: true } as never)).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      expect(guest.fs.readdir).toHaveBeenCalledTimes(2);
+    });
+
+    it('restricts mkdir and rm options to the supported boolean shapes', async () => {
+      const guest = createSpiedGuest();
+      const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+      const facade = createNexariBrowserRuntime(runtime);
+      await facade.boot();
+
+      await facade.fs.mkdir('dir', { recursive: true });
+      await facade.fs.mkdir('dir2');
+      await facade.fs.rm('f.txt', { recursive: true, force: true });
+      await facade.fs.rm('g.txt');
+
+      expect(guest.fs.mkdir).toHaveBeenCalledWith('dir', { recursive: true });
+      expect(guest.fs.mkdir).toHaveBeenCalledWith('dir2', undefined);
+      expect(guest.fs.rm).toHaveBeenCalledWith('f.txt', { recursive: true, force: true });
+      expect(guest.fs.rm).toHaveBeenCalledWith('g.txt', undefined);
+
+      await expect(facade.fs.mkdir('dir3', { unknown: true } as never)).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      await expect(facade.fs.rm('h.txt', { force: 'yes' } as never)).rejects.toBeInstanceOf(
+        NexariUnsupportedCapabilityError,
+      );
+      expect(guest.fs.mkdir).toHaveBeenCalledTimes(2);
+      expect(guest.fs.rm).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
