@@ -186,7 +186,9 @@ class NexariRuntimeAdapter implements NexariRuntime {
       cancel(terminated);
     }
 
-    this.#teardownPromise = this.#guest?.teardown() ?? Promise.resolve();
+    const guest = this.#guest;
+    this.#guest = undefined;
+    this.#teardownPromise = guest?.teardown() ?? Promise.resolve();
 
     return this.#teardownPromise;
   }
