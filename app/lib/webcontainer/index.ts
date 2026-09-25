@@ -8,7 +8,14 @@ interface WebContainerContext {
   backend?: RuntimeBackend;
 }
 
-const runtimeBackend = configuredRuntimeBackend();
+/*
+ * Module-scope selector input. Recomputed once per module evaluation; under
+ * HMR this module re-evaluates wholesale (no hot.accept), so importers always
+ * observe the backend matching the boot they receive. Never derive selection
+ * from webcontainerContext.backend: it is a cache tag that stays undefined
+ * until boot completes.
+ */
+export const runtimeBackend = configuredRuntimeBackend();
 
 export const webcontainerContext: WebContainerContext = import.meta.hot?.data.webcontainerContext ?? {
   loaded: false,
