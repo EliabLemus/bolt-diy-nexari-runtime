@@ -193,6 +193,19 @@ describe('nexari vertical composition', () => {
     expect(result).toEqual({ output: 'hello\na warning', exitCode: 0 });
     expect(preempt).not.toHaveBeenCalled();
     expect(harness.spawn).toHaveBeenCalledOnce();
+    expect(harness.spawn).toHaveBeenCalledWith('sh', ['-c', 'echo hello'], expect.anything());
+
+    harness.spawn.mockImplementationOnce(async () => ({
+      stdout: textStream(''),
+      stderr: textStream('not found'),
+      exit: Promise.resolve(127),
+      kill: vi.fn(),
+    }));
+
+    const failure = await shell.executeCommand('session-1', 'missing-cmd', vi.fn(), new AbortController().signal);
+
+    // The shell merge appends non-empty stderr after a newline even on empty stdout.
+    expect(failure).toEqual({ output: '\nnot found', exitCode: 127 });
   });
 
   it('AC-4: filesystem basics pass through the composed runtime to the guest', async () => {
