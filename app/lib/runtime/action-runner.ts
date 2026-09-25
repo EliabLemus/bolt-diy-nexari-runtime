@@ -1,4 +1,3 @@
-import type { WebContainer } from '@webcontainer/api';
 import { path as nodePath } from '~/utils/path';
 import { atom, map, type MapStore } from 'nanostores';
 import type { ActionAlert, BoltAction, DeployAlert, FileHistory, SupabaseAction, SupabaseAlert } from '~/types/actions';
@@ -34,6 +33,27 @@ export type ActionStateUpdate =
 
 type ActionsMap = MapStore<Record<string, ActionState>>;
 
+/**
+ * Narrow structural view of the browser runtime this runner needs. It is
+ * satisfied by the WebContainer instance on the stackblitz control path (the
+ * workbench passes the shared `webcontainer` promise unchanged) and by any
+ * future backend adapter exposing the same shape. Deliberately narrower than
+ * the full WebContainer surface: no mount, watch, rename, or preview APIs are
+ * reachable from action code.
+ */
+export interface ActionRunnerRuntimeSurface {
+  readonly workdir: string;
+  fs: {
+    readFile(path: string, encoding?: null): Promise<Uint8Array>;
+    readFile(path: string, encoding: BufferEncoding): Promise<string>;
+    writeFile(path: string, contents: string | Uint8Array): Promise<void>;
+    readdir(path: string): Promise<string[]>;
+    mkdir(path: string, options: { recursive: true }): Promise<void | string>;
+    rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
+  };
+  spawn(command: string, args: string[]): Promise<{ output: ReadableStream<string>; exit: Promise<number> }>;
+}
+
 class ActionCommandError extends Error {
   readonly _output: string;
   readonly _header: string;
@@ -64,7 +84,7 @@ class ActionCommandError extends Error {
 }
 
 export class ActionRunner {
-  #webcontainer: Promise<WebContainer>;
+  #runtime: Promise<ActionRunnerRuntimeSurface>;
   #currentExecutionPromise: Promise<void> = Promise.resolve();
   #shellTerminal: () => ActionShell;
   runnerId = atom<string>(`${Date.now()}`);
@@ -75,13 +95,13 @@ export class ActionRunner {
   buildOutput?: { path: string; exitCode: number; output: string };
 
   constructor(
-    webcontainerPromise: Promise<WebContainer>,
+    runtimePromise: Promise<ActionRunnerRuntimeSurface>,
     getShellTerminal: () => ActionShell,
     onAlert?: (alert: ActionAlert) => void,
     onSupabaseAlert?: (alert: SupabaseAlert) => void,
     onDeployAlert?: (alert: DeployAlert) => void,
   ) {
-    this.#webcontainer = webcontainerPromise;
+    this.#runtime = runtimePromise;
     this.#shellTerminal = getShellTerminal;
     this.onAlert = onAlert;
     this.onSupabaseAlert = onSupabaseAlert;
@@ -301,8 +321,8 @@ export class ActionRunner {
       unreachable('Expected file action');
     }
 
-    const webcontainer = await this.#webcontainer;
-    const relativePath = nodePath.relative(webcontainer.workdir, action.filePath);
+    const runtime = await this.#runtime;
+    const relativePath = nodePath.relative(runtime.workdir, action.filePath);
 
     let folder = nodePath.dirname(relativePath);
 
@@ -311,7 +331,7 @@ export class ActionRunner {
 
     if (folder !== '.') {
       try {
-        await webcontainer.fs.mkdir(folder, { recursive: true });
+        await runtime.fs.mkdir(folder, { recursive: true });
         logger.debug('Created folder', folder);
       } catch (error) {
         logger.error('Failed to create folder\n\n', error);
@@ -319,7 +339,7 @@ export class ActionRunner {
     }
 
     try {
-      await webcontainer.fs.writeFile(relativePath, action.content);
+      await runtime.fs.writeFile(relativePath, action.content);
       logger.debug(`File written ${relativePath}`);
     } catch (error) {
       logger.error('Failed to write file\n\n', error);
@@ -334,9 +354,9 @@ export class ActionRunner {
 
   async getFileHistory(filePath: string): Promise<FileHistory | null> {
     try {
-      const webcontainer = await this.#webcontainer;
+      const runtime = await this.#runtime;
       const historyPath = this.#getHistoryPath(filePath);
-      const content = await webcontainer.fs.readFile(historyPath, 'utf-8');
+      const content = await runtime.fs.readFile(historyPath, 'utf-8');
 
       return JSON.parse(content);
     } catch (error) {
@@ -346,7 +366,6 @@ export class ActionRunner {
   }
 
   async saveFileHistory(filePath: string, history: FileHistory) {
-    // const webcontainer = await this.#webcontainer;
     const historyPath = this.#getHistoryPath(filePath);
 
     await this.#runFileAction({
@@ -377,10 +396,10 @@ export class ActionRunner {
       source: 'netlify',
     });
 
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     // Create a new terminal specifically for the build
-    const buildProcess = await webcontainer.spawn('npm', ['run', 'build']);
+    const buildProcess = await runtime.spawn('npm', ['run', 'build']);
 
     let output = '';
     const outputPromise = buildProcess.output.pipeTo(
@@ -438,10 +457,10 @@ export class ActionRunner {
 
     // Try to find the first existing build directory
     for (const dir of commonBuildDirs) {
-      const dirPath = nodePath.join(webcontainer.workdir, dir);
+      const dirPath = nodePath.join(runtime.workdir, dir);
 
       try {
-        await webcontainer.fs.readdir(dirPath);
+        await runtime.fs.readdir(dirPath);
         buildDir = dirPath;
         break;
       } catch {
@@ -451,7 +470,7 @@ export class ActionRunner {
 
     // If no build directory was found, use the default (dist)
     if (!buildDir) {
-      buildDir = nodePath.join(webcontainer.workdir, 'dist');
+      buildDir = nodePath.join(runtime.workdir, 'dist');
     }
 
     const buildResult = {
@@ -578,7 +597,7 @@ export class ActionRunner {
 
         // Check if any of the files exist using WebContainer
         try {
-          const webcontainer = await this.#webcontainer;
+          const runtime = await this.#runtime;
           const existingFiles = [];
 
           for (const filePath of filePaths) {
@@ -587,7 +606,7 @@ export class ActionRunner {
             } // Skip flags
 
             try {
-              await webcontainer.fs.readFile(filePath);
+              await runtime.fs.readFile(filePath);
               existingFiles.push(filePath);
             } catch {
               // File doesn't exist, skip it
@@ -623,8 +642,8 @@ export class ActionRunner {
         const targetDir = cdMatch[1].trim();
 
         try {
-          const webcontainer = await this.#webcontainer;
-          await webcontainer.fs.readdir(targetDir);
+          const runtime = await this.#runtime;
+          await runtime.fs.readdir(targetDir);
         } catch {
           return {
             shouldModify: true,
@@ -643,8 +662,8 @@ export class ActionRunner {
         const sourceFile = parts[1];
 
         try {
-          const webcontainer = await this.#webcontainer;
-          await webcontainer.fs.readFile(sourceFile);
+          const runtime = await this.#runtime;
+          await runtime.fs.readFile(sourceFile);
         } catch {
           return {
             shouldModify: false,

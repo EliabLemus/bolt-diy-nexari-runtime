@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActionRunner } from './action-runner';
+import { ActionRunner, type ActionRunnerRuntimeSurface } from './action-runner';
 import type { ActionCallbackData } from './message-parser';
 import type { ActionShell } from './action-shell';
 
@@ -174,5 +174,168 @@ describe('ActionRunner accepts any ActionShell implementation', () => {
 
     expect(seam.executeCommand).toHaveBeenCalledWith(expect.any(String), 'synthetic command', expect.any(Function));
     expect(runner.actions.get().n1.status).toBe('complete');
+  });
+});
+
+describe('ActionRunner consumes only the narrow runtime surface', () => {
+  interface SurfaceFile {
+    bytes: Uint8Array;
+    text: string;
+  }
+
+  /**
+   * In-memory fake satisfying ActionRunnerRuntimeSurface and nothing more:
+   * every member outside the surface (mount, watch, rename, on, internal,
+   * ...) is intentionally absent, so a runtime touchpoint that drifts beyond
+   * the narrow surface fails the typecheck of this harness itself.
+   */
+  function createSurfaceFake() {
+    const files = new Map<string, SurfaceFile>();
+    const dirs = new Set<string>(['.']);
+    const spawns: Array<{ command: string; args: string[] }> = [];
+
+    const fs: ActionRunnerRuntimeSurface['fs'] = {
+      readFile: vi.fn(async (path: string, encoding?: null | BufferEncoding): Promise<string | Uint8Array> => {
+        const file = files.get(path);
+
+        if (!file) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+
+        return encoding ? file.text : file.bytes;
+      }) as ActionRunnerRuntimeSurface['fs']['readFile'],
+      writeFile: vi.fn(async (path: string, contents: string | Uint8Array) => {
+        const parent = path.split('/').slice(0, -1).join('/') || '.';
+        dirs.add(parent);
+        files.set(path, {
+          bytes: contents instanceof Uint8Array ? contents : new TextEncoder().encode(contents),
+          text: typeof contents === 'string' ? contents : '',
+        });
+      }),
+      readdir: vi.fn(async (path: string) => {
+        if (!dirs.has(path)) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+
+        return [...dirs].filter((dir) => dir !== path && dir.startsWith(`${path === '.' ? '' : path}/`));
+      }),
+      mkdir: vi.fn(async (path: string) => {
+        dirs.add(path);
+
+        let cursor = path;
+
+        while (cursor.includes('/')) {
+          cursor = cursor.split('/').slice(0, -1).join('/');
+          dirs.add(cursor);
+        }
+      }),
+      rm: vi.fn(async (path: string) => {
+        dirs.delete(path);
+        files.delete(path);
+      }),
+    };
+
+    const spawn = vi.fn(async (command: string, args: string[]) => {
+      spawns.push({ command, args });
+
+      const stream = (text: string) =>
+        new ReadableStream<string>({
+          start(controller) {
+            if (text.length > 0) {
+              controller.enqueue(text);
+            }
+
+            controller.close();
+          },
+        });
+
+      return {
+        output: stream('build ok'),
+        exit: Promise.resolve(0),
+      };
+    });
+
+    const surface: ActionRunnerRuntimeSurface = { workdir: '/project', fs, spawn };
+
+    return { surface, fs, spawn, spawns, files, dirs };
+  }
+
+  function createSurfaceRunner(surface: ActionRunnerRuntimeSurface, onDeployAlert?: (alert: unknown) => void) {
+    return new ActionRunner(
+      Promise.resolve(surface),
+      () => createShellStub(),
+      () => undefined,
+      () => undefined,
+      onDeployAlert,
+    );
+  }
+
+  it('runs file actions through the narrow surface (mkdir + writeFile)', async () => {
+    const { surface, fs } = createSurfaceFake();
+    const runner = createSurfaceRunner(surface);
+
+    runner.addAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'f1',
+      action: { type: 'file', filePath: '/project/src/main.ts', content: 'export {};' },
+    });
+    await runner.runAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'f1',
+      action: { type: 'file', filePath: '/project/src/main.ts', content: 'export {};' },
+    });
+
+    expect(fs.mkdir).toHaveBeenCalledWith('src', { recursive: true });
+    expect(fs.writeFile).toHaveBeenCalledWith('src/main.ts', 'export {};');
+    expect(runner.actions.get().f1.status).toBe('complete');
+  });
+
+  it('reads file history as utf-8 text through the narrow surface', async () => {
+    const { surface } = createSurfaceFake();
+    const runner = createSurfaceRunner(surface);
+    const history = new Map<string, string>([['.history/src/app.ts', JSON.stringify({ original: 'x' })]]);
+
+    (surface.fs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (path: string, encoding?: null) => {
+      const text = history.get(path);
+
+      if (encoding && text !== undefined) {
+        return text;
+      }
+
+      throw new Error(`ENOENT: ${path}`);
+    });
+
+    await expect(runner.getFileHistory('src/app.ts')).resolves.toEqual({ original: 'x' });
+    expect(surface.fs.readFile).toHaveBeenCalledWith('.history/src/app.ts', 'utf-8');
+  });
+
+  it('runs the build action through the narrow surface (spawn + readdir probes)', async () => {
+    const { surface, spawn } = createSurfaceFake();
+    (surface.fs.readdir as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ENOENT'));
+
+    const runner = createSurfaceRunner(surface, () => undefined);
+
+    runner.addAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'b1',
+      action: { type: 'build', content: 'npm run build' },
+    });
+    await runner.runAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'b1',
+      action: { type: 'build', content: 'npm run build' },
+    });
+
+    expect(spawn).toHaveBeenCalledWith('npm', ['run', 'build']);
+    expect(runner.buildOutput).toEqual({
+      path: '/project/dist',
+      exitCode: 0,
+      output: 'build ok',
+    });
+    expect(runner.actions.get().b1.status).toBe('complete');
   });
 });
