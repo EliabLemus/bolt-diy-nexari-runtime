@@ -4,6 +4,7 @@ import { ActionRunner } from '~/lib/runtime/action-runner';
 import { createActionShell } from '~/lib/runtime/action-shell-selector';
 import type { ActionCallbackData, ArtifactCallbackData } from '~/lib/runtime/message-parser';
 import { runtimeBackend, webcontainer } from '~/lib/webcontainer';
+import { createActionRunnerRuntime } from '~/lib/runtime/action-runner-runtime-selector';
 import type { ITerminal } from '~/types/terminal';
 import { unreachable } from '~/utils/unreachable';
 import { EditorStore } from './editor';
@@ -483,7 +484,7 @@ export class WorkbenchStore {
       closed: false,
       type,
       runner: new ActionRunner(
-        webcontainer,
+        createActionRunnerRuntime(runtimeBackend, webcontainer),
         () => createActionShell(runtimeBackend, this.boltTerminal, webcontainer),
         (alert) => {
           if (this.#reloadedMessages.has(messageId)) {
