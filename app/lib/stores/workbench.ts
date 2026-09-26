@@ -5,6 +5,7 @@ import { createActionShell } from '~/lib/runtime/action-shell-selector';
 import type { ActionCallbackData, ArtifactCallbackData } from '~/lib/runtime/message-parser';
 import { runtimeBackend, webcontainer } from '~/lib/webcontainer';
 import { createActionRunnerRuntime } from '~/lib/runtime/action-runner-runtime-selector';
+import { createFilesStoreRuntime } from '~/lib/runtime/files-store-runtime-selector';
 import type { ITerminal } from '~/types/terminal';
 import { unreachable } from '~/utils/unreachable';
 import { EditorStore } from './editor';
@@ -39,7 +40,7 @@ export type WorkbenchViewType = 'code' | 'diff' | 'preview';
 
 export class WorkbenchStore {
   #previewsStore = new PreviewsStore(webcontainer);
-  #filesStore = new FilesStore(webcontainer);
+  #filesStore = new FilesStore(createFilesStoreRuntime(runtimeBackend, webcontainer));
   #editorStore = new EditorStore(this.#filesStore);
   #terminalStore = new TerminalStore(webcontainer);
 

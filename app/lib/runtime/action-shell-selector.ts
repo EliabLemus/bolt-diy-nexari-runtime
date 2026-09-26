@@ -2,6 +2,7 @@ import type { RuntimeBackend } from './runtime-selector';
 import type { ActionShell } from './action-shell';
 import { createStackblitzActionShell } from './stackblitz-action-shell';
 import { createNexariActionShell } from './nexari-action-shell';
+import { isNexariFacade } from './nexari-surface';
 import type { NexariBrowserRuntime } from './nexari-runtime-facade';
 import type { BoltShell } from '~/utils/shell';
 
@@ -28,28 +29,13 @@ export class NexariActionShellSelectionError extends Error {
   }
 }
 
-/**
- * Structural predicate over the facade surface (`nexari-runtime-facade.ts`).
- * `runActionCommand` is the strongest discriminator — the WebContainer surface
- * has spawn/mount/teardown but no runActionCommand — supplemented by the
- * lifecycle trio and a string state field. Cheap, side-effect-free, and
- * idempotent: the resolution+verification sequence runs once per guard call
- * (twice per action: the runner's outer guard and executeCommand's re-guard).
+/*
+ * The facade predicate lives in `nexari-surface.ts`, shared with the
+ * action-runner and files-store selectors so every consumer verifies the
+ * same facade shape. The shared predicate additionally requires the `fs`
+ * object and `spawn` function; both are present on every real facade, so
+ * acceptance is unchanged while filesystem consumers stay covered.
  */
-function isNexariFacade(value: unknown): value is NexariBrowserRuntime {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-
-  return (
-    typeof candidate.runActionCommand === 'function' &&
-    typeof candidate.teardown === 'function' &&
-    typeof candidate.boot === 'function' &&
-    typeof candidate.state === 'string'
-  );
-}
 
 async function resolveNexariFacade(runtimePromise: Promise<unknown>): Promise<NexariBrowserRuntime> {
   const resolved = await runtimePromise;

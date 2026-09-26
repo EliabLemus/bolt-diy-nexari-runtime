@@ -1,6 +1,7 @@
 import type { ActionRunnerRuntimeSurface } from './action-runner';
 import type { RuntimeBackend } from './runtime-selector';
 import { NexariUnsupportedCapabilityError, type NexariBrowserRuntime } from './nexari-runtime-facade';
+import { isNexariFacade, toGuestPath } from './nexari-surface';
 import { WORK_DIR } from '~/utils/constants';
 
 /**
@@ -18,81 +19,12 @@ export class NexariActionRunnerSurfaceSelectionError extends Error {
   }
 }
 
-/**
- * Structural predicate over the facade surface (`nexari-runtime-facade.ts`),
- * mirroring `action-shell-selector.ts` so both consumers agree on what counts
- * as a booted facade.
+/*
+ * The facade predicate and the app→guest path translation live in
+ * `nexari-surface.ts`, shared with the action-shell and files-store
+ * selectors so every consumer verifies the same facade shape and
+ * translates paths identically.
  */
-function isNexariFacade(value: unknown): value is NexariBrowserRuntime {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-
-  return (
-    typeof candidate.runActionCommand === 'function' &&
-    typeof candidate.teardown === 'function' &&
-    typeof candidate.boot === 'function' &&
-    typeof candidate.state === 'string' &&
-    typeof candidate.fs === 'object' &&
-    candidate.fs !== null &&
-    typeof candidate.spawn === 'function'
-  );
-}
-
-/**
- * Translate an app-domain path to the nexari guest path domain. The app works
- * in two shapes: bare workdir-relative paths (ActionRunner relativizes file
- * actions against the surface `workdir`) and absolute app paths rooted at
- * `WORK_DIR` (`/home/project/...`, the prompt contract's cwd).
- *
- * The nexari guest VFS is rooted at `/` — the pinned adapter advertises
- * `workdir = '/'` and guest spawns default to the root — so file actions,
- * history files, and `sh -c` command cwd must agree. The translation is a
- * guarded prefix strip plus dot-segment normalization: `/home/project/x` →
- * `/x`, bare `x` → `/x`. Anything escaping the workdir (`..`, other roots)
- * is refused typed instead of being re-rooted silently.
- */
-function toGuestPath(path: string): string {
-  let relative: string;
-
-  if (path.startsWith('/')) {
-    if (!path.startsWith(`${WORK_DIR}/`) && path !== WORK_DIR) {
-      throw new NexariUnsupportedCapabilityError(
-        `fs paths outside the work directory (${path}); the nexari surface is scoped to ${WORK_DIR}`,
-      );
-    }
-
-    relative = path === WORK_DIR ? '' : path.slice(WORK_DIR.length + 1);
-  } else {
-    relative = path;
-  }
-
-  const stack: string[] = [];
-
-  for (const segment of relative.split('/')) {
-    if (segment === '' || segment === '.') {
-      continue;
-    }
-
-    if (segment === '..') {
-      if (stack.length === 0) {
-        throw new NexariUnsupportedCapabilityError(
-          `fs paths outside the work directory (${path}); the nexari surface is scoped to ${WORK_DIR}`,
-        );
-      }
-
-      stack.pop();
-
-      continue;
-    }
-
-    stack.push(segment);
-  }
-
-  return `/${stack.join('/')}`;
-}
 
 /**
  * Build the nexari-backed `ActionRunnerRuntimeSurface` over a verified
