@@ -28,9 +28,9 @@ export function createSnapshotRestoreRuntime(
  * becomes observable without changing scheduling. Whole-promise rejection
  * is reserved for the typed path-translation refusals raised synchronously
  * inside the dispatched callbacks — a snapshot pointing outside the work
- * directory must not silently restore nothing. Operational fs failures
- * after dispatch surface as unhandled rejections exactly as in the
- * historical restore.
+ * directory must not silently restore nothing — and for the first
+ * operational fs failure after dispatch, which the join surfaces to the
+ * caller (pinned by the rejection-propagation test in the spec).
  */
 export async function restoreSnapshotFiles(surface: FilesStoreRuntimeSurface, snapshot?: Snapshot): Promise<void> {
   const validSnapshot = snapshot || { chatIndex: '', files: {} };
