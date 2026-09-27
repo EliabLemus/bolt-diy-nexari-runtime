@@ -93,13 +93,17 @@ export async function createNexariTerminalSession(
         }
 
         terminal.write(value);
-        output += value;
 
-        const bannerAt = output.indexOf(NEXARI_REPL_BANNER);
+        if (!ready) {
+          output += value;
 
-        if (bannerAt !== -1 && /❯/.test(output.slice(bannerAt + NEXARI_REPL_BANNER.length))) {
-          ready = true;
-          settleReady();
+          const bannerAt = output.indexOf(NEXARI_REPL_BANNER);
+
+          if (bannerAt !== -1 && /❯/.test(output.slice(bannerAt + NEXARI_REPL_BANNER.length))) {
+            ready = true;
+            output = '';
+            settleReady();
+          }
         }
       }
     } catch (error) {
