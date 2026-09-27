@@ -26,6 +26,7 @@ export interface VivariGuestRuntimeLike {
 }
 
 export interface VivariGuestProcessLike {
+  input: WritableStream<string>;
   stdout: ReadableStream<string>;
   stderr: ReadableStream<string>;
   exit: Promise<number>;
@@ -70,6 +71,7 @@ function normalizeReadEncoding(encoding: string | undefined): 'utf8' | undefined
 
 function adaptVivariProcess(process: VivariGuestProcessLike): NexariGuestProcess {
   return {
+    input: process.input,
     stdout: process.stdout,
     stderr: process.stderr,
     exit: process.exit,

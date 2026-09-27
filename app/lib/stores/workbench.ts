@@ -42,7 +42,7 @@ export class WorkbenchStore {
   #previewsStore = new PreviewsStore(webcontainer);
   #filesStore = new FilesStore(createFilesStoreRuntime(runtimeBackend, webcontainer));
   #editorStore = new EditorStore(this.#filesStore);
-  #terminalStore = new TerminalStore(webcontainer);
+  #terminalStore = new TerminalStore(runtimeBackend, webcontainer);
 
   #reloadedMessages = new Set<string>();
 

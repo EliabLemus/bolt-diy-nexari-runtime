@@ -16,6 +16,8 @@ export interface NexariGuestFileSystem {
 }
 
 export interface NexariGuestProcess {
+  /** Interactive `sh` owns this lane; action commands do not write to it. */
+  input: WritableStream<string>;
   stdout: ReadableStream<string>;
   stderr: ReadableStream<string>;
   exit: Promise<number>;
@@ -61,6 +63,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
   #bootPromise: Promise<void> | undefined;
   #teardownPromise: Promise<void> | undefined;
   #activeActionCancels = new Set<(reason: unknown) => void>();
+  #activeInteractiveProcesses = new Set<NexariGuestProcess>();
   #state: NexariRuntimeState = 'created';
 
   readonly fs: NexariGuestFileSystem = {
@@ -106,10 +109,20 @@ class NexariRuntimeAdapter implements NexariRuntime {
     return this.#bootPromise;
   }
 
-  spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess> {
+  async spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess> {
     this.#assertReady();
 
-    return this.#guest!.spawn(command, args, options);
+    const process = await this.#guest!.spawn(command, args, options);
+
+    if (this.#state !== 'ready') {
+      process.kill();
+      throw new NexariRuntimeTerminatedError();
+    }
+
+    this.#activeInteractiveProcesses.add(process);
+    void process.exit.finally(() => this.#activeInteractiveProcesses.delete(process));
+
+    return process;
   }
 
   async runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult> {
@@ -192,6 +205,11 @@ class NexariRuntimeAdapter implements NexariRuntime {
     for (const cancel of this.#activeActionCancels) {
       cancel(terminated);
     }
+
+    for (const process of this.#activeInteractiveProcesses) {
+      process.kill();
+    }
+    this.#activeInteractiveProcesses.clear();
 
     const guest = this.#guest;
     this.#guest = undefined;

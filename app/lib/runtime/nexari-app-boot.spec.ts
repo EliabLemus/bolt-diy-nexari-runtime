@@ -37,6 +37,7 @@ function createGuestHarness({ spawnProcess }: { spawnProcess?: VivariGuestProces
     guestSpawn.mockResolvedValue(spawnProcess);
   } else {
     guestSpawn.mockResolvedValue({
+      input: new WritableStream<string>(),
       stdout: textStream(),
       stderr: textStream(),
       exit: Promise.resolve(0),
@@ -206,6 +207,7 @@ describe('createAppNexariBootFactory', () => {
     const kill = vi.fn();
     const harness = createGuestHarness({
       spawnProcess: {
+        input: new WritableStream<string>(),
         stdout: textStream('', false),
         stderr: textStream('', false),
         exit: new Promise<number>(() => undefined),

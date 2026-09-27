@@ -67,7 +67,8 @@ export interface NexariSpawnOptions {
 
 /**
  * WebContainer-shaped process surface. `output` merges the guest's stdout and
- * stderr into a single stream; `input` is fail-closed for this slice.
+ * stderr into a single stream. Interactive terminal wiring is allowed only
+ * through an uncapped `sh` spawn; unsupported spawn options remain refused.
  */
 export interface NexariBrowserProcess {
   readonly input: WritableStream<string>;
@@ -297,9 +298,7 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
       const process = await runtime.spawn(command, args, options ? { signal: options.signal } : undefined);
 
       return {
-        input: new WritableStream<string>({
-          write: unsupportedCapability('process stdin (input)'),
-        }),
+        input: process.input,
         output: mergeTextStreams([process.stdout, process.stderr]),
         exit: process.exit,
         kill: () => process.kill(),

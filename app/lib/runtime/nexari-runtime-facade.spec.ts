@@ -52,6 +52,7 @@ function createSyntheticGuest(): NexariGuestRuntime {
       },
     },
     spawn: async () => ({
+      input: new WritableStream<string>(),
       stdout: new ReadableStream<string>({
         start: (controller) => {
           controller.enqueue('out');
@@ -128,13 +129,30 @@ describe('createNexariBrowserRuntime', () => {
     await expect(process.exit).resolves.toBe(0);
   });
 
-  it('rejects writes to the unsupported process stdin lane with a typed error', async () => {
-    const { facade } = await createReadyFacade();
+  it('forwards interactive process stdin to the guest', async () => {
+    const writes: string[] = [];
+    const guest = createSpiedGuest();
+    guest.spawn = vi.fn().mockResolvedValue({
+      input: new WritableStream<string>({
+        write: (data) => {
+          writes.push(data);
+        },
+      }),
+      stdout: new ReadableStream<string>({ start: (controller) => controller.close() }),
+      stderr: new ReadableStream<string>({ start: (controller) => controller.close() }),
+      exit: Promise.resolve(0),
+      kill: () => undefined,
+    });
+
+    const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+    const facade = createNexariBrowserRuntime(runtime);
+    await facade.boot();
+
     const process = await facade.spawn('sh');
-
     const writer = process.input.getWriter();
+    await writer.write('echo ready\n');
 
-    await expect(writer.write('nope')).rejects.toBeInstanceOf(NexariUnsupportedCapabilityError);
+    expect(writes).toEqual(['echo ready\n']);
   });
 
   it('rejects guest-unsupported spawn options with a typed error', async () => {

@@ -1,18 +1,22 @@
 import type { WebContainer, WebContainerProcess } from '@webcontainer/api';
 import { atom, type WritableAtom } from 'nanostores';
+import { createNexariTerminalSession, type TerminalSession } from '~/lib/runtime/nexari-terminal';
+import type { RuntimeBackend } from '~/lib/runtime/runtime-selector';
 import type { ITerminal } from '~/types/terminal';
 import { newBoltShellProcess, newShellProcess } from '~/utils/shell';
 import { coloredText } from '~/utils/terminal';
 
 export class TerminalStore {
-  #webcontainer: Promise<WebContainer>;
-  #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess }> = [];
+  #runtime: Promise<unknown>;
+  #backend: RuntimeBackend;
+  #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess | TerminalSession }> = [];
   #boltTerminal = newBoltShellProcess();
 
   showTerminal: WritableAtom<boolean> = import.meta.hot?.data.showTerminal ?? atom(true);
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
+  constructor(backend: RuntimeBackend, runtimePromise: Promise<unknown>) {
+    this.#backend = backend;
+    this.#runtime = runtimePromise;
 
     if (import.meta.hot) {
       import.meta.hot.data.showTerminal = this.showTerminal;
@@ -26,8 +30,13 @@ export class TerminalStore {
     this.showTerminal.set(value !== undefined ? value : !this.showTerminal.get());
   }
   async attachBoltTerminal(terminal: ITerminal) {
+    if (this.#backend === 'nexari') {
+      await this._attachNexariTerminal(terminal);
+      return;
+    }
+
     try {
-      const wc = await this.#webcontainer;
+      const wc = (await this.#runtime) as WebContainer;
       await this.#boltTerminal.init(wc, terminal);
     } catch (error: any) {
       terminal.write(coloredText.red('Failed to spawn bolt shell\n\n') + error.message);
@@ -36,12 +45,28 @@ export class TerminalStore {
   }
 
   async attachTerminal(terminal: ITerminal) {
+    if (this.#backend === 'nexari') {
+      await this._attachNexariTerminal(terminal);
+      return;
+    }
+
     try {
-      const shellProcess = await newShellProcess(await this.#webcontainer, terminal);
+      const shellProcess = await newShellProcess((await this.#runtime) as WebContainer, terminal);
       this.#terminals.push({ terminal, process: shellProcess });
     } catch (error: any) {
       terminal.write(coloredText.red('Failed to spawn shell\n\n') + error.message);
       return;
+    }
+  }
+
+  private async _attachNexariTerminal(terminal: ITerminal) {
+    try {
+      await this.detachTerminal(terminal);
+
+      const session = await createNexariTerminalSession(this.#runtime, terminal);
+      this.#terminals.push({ terminal, process: session });
+    } catch (error: any) {
+      terminal.write(coloredText.red('Failed to spawn nexari shell\n\n') + error.message);
     }
   }
 

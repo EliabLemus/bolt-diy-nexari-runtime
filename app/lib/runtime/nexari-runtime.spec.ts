@@ -27,6 +27,7 @@ function deferred<T>() {
 
 function createGuest() {
   const process: NexariGuestProcess = {
+    input: new WritableStream<string>(),
     stdout: stream('stdout'),
     stderr: stream('stderr'),
     exit: Promise.resolve(17),
@@ -153,6 +154,34 @@ describe('createNexariRuntime', () => {
 
     await expect(command).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
     expect(process.kill).toHaveBeenCalledOnce();
+  });
+
+  it('kills an interactive process when teardown begins and rejects one that resolves after teardown', async () => {
+    const { guest } = createGuest();
+    const exit = deferred<number>();
+    const interactive: NexariGuestProcess = {
+      input: new WritableStream<string>(),
+      stdout: stream(''),
+      stderr: stream(''),
+      exit: exit.promise,
+      kill: vi.fn(),
+    };
+    const late = deferred<NexariGuestProcess>();
+
+    vi.mocked(guest.spawn).mockReturnValueOnce(Promise.resolve(interactive)).mockReturnValueOnce(late.promise);
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
+    await runtime.boot();
+
+    await runtime.spawn('sh');
+
+    const lateSpawn = runtime.spawn('sh');
+    await runtime.teardown();
+    late.resolve({ ...interactive, kill: vi.fn() });
+
+    expect(interactive.kill).toHaveBeenCalledOnce();
+
+    await expect(lateSpawn).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
   });
 
   it('contains a guest teardown rejection when boot resolves after teardown', async () => {

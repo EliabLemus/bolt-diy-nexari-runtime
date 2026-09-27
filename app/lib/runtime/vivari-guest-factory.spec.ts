@@ -26,6 +26,7 @@ function fakeVivariProcess({
   exitCode = 0,
 }: { stdout?: string; stderr?: string; exitCode?: number } = {}): VivariGuestProcessLike {
   return {
+    input: new WritableStream<string>(),
     stdout: textStream(stdout),
     stderr: textStream(stderr),
     exit: Promise.resolve(exitCode),
