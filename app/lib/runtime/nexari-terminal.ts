@@ -5,6 +5,13 @@ import { isNexariFacade } from './nexari-surface';
 /** The clean-room REPL banner defined by the pinned Nexari terminal contract. */
 export const NEXARI_REPL_BANNER = 'Vivari shell — type commands, Enter to run.\n';
 
+/**
+ * Maximum output retained only while detecting the clean-room REPL readiness
+ * banner. Guest output is still forwarded to the terminal; this bounds the
+ * parser state when a malformed guest never reaches its prompt.
+ */
+export const MAX_NEXARI_REPL_READINESS_BUFFER = 16 * 1024;
+
 export class NexariTerminalSelectionError extends Error {
   constructor() {
     super('Nexari terminal selected but the runtime promise did not resolve to the Nexari facade.');
@@ -95,6 +102,13 @@ export async function createNexariTerminalSession(
         terminal.write(value);
 
         if (!ready) {
+          if (output.length + value.length > MAX_NEXARI_REPL_READINESS_BUFFER) {
+            failBeforeReady(new Error('Nexari interactive shell exceeded the readiness output limit.'));
+            stop();
+
+            return;
+          }
+
           output += value;
 
           const bannerAt = output.indexOf(NEXARI_REPL_BANNER);

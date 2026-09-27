@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import type { ITerminal } from '~/types/terminal';
-import { NEXARI_REPL_BANNER, NexariTerminalSelectionError, createNexariTerminalSession } from './nexari-terminal';
+import {
+  MAX_NEXARI_REPL_READINESS_BUFFER,
+  NEXARI_REPL_BANNER,
+  NexariTerminalSelectionError,
+  createNexariTerminalSession,
+} from './nexari-terminal';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -118,6 +123,31 @@ describe('createNexariTerminalSession', () => {
     await expect(createNexariTerminalSession(Promise.resolve(facadeWithProcess(process)), terminal)).rejects.toBe(
       failure,
     );
+    input('late\n');
+
+    expect(process.kill).toHaveBeenCalledOnce();
+    expect(writes).toEqual([]);
+  });
+
+  it('AC-3: fails closed rather than retaining unbounded output before REPL readiness', async () => {
+    const writes: string[] = [];
+    let emit!: (value: string) => void;
+    const process = {
+      input: new WritableStream<string>({ write: (data) => void writes.push(data) }),
+      output: new ReadableStream<string>({
+        start: (controller) => {
+          emit = (value) => controller.enqueue(value);
+        },
+      }),
+      exit: new Promise<number>(() => undefined),
+      kill: vi.fn(),
+    };
+    const { terminal, input } = terminalHarness();
+    const attaching = createNexariTerminalSession(Promise.resolve(facadeWithProcess(process)), terminal);
+
+    emit('x'.repeat(MAX_NEXARI_REPL_READINESS_BUFFER + 1));
+
+    await expect(attaching).rejects.toThrow('exceeded the readiness output limit');
     input('late\n');
 
     expect(process.kill).toHaveBeenCalledOnce();
