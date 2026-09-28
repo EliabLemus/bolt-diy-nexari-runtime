@@ -95,6 +95,10 @@ export class TerminalStore {
    * idempotent and no stale session receives later resize calls.
    */
   dispose() {
+    if (this.#backend !== 'nexari') {
+      return;
+    }
+
     const terminals = this.#terminals;
     this.#terminals = [];
 

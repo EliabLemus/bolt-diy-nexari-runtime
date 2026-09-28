@@ -20,11 +20,13 @@ import { TerminalStore } from './terminal';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
 
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function terminalHarness(): ITerminal {
@@ -125,6 +127,23 @@ describe('TerminalStore runtime selection', () => {
     expect(lateSession.resize).not.toHaveBeenCalled();
   });
 
+  it('AC-2: leaves a detached terminal untouched when its nexari attach rejects late', async () => {
+    const pending = deferred<never>();
+    mocks.createNexariTerminalSession.mockReturnValue(pending.promise);
+
+    const store = new TerminalStore('nexari', Promise.resolve({}));
+    const terminal = terminalHarness();
+
+    const attaching = store.attachTerminal(terminal);
+    await vi.waitFor(() => expect(mocks.createNexariTerminalSession).toHaveBeenCalledOnce());
+    await store.detachTerminal(terminal);
+
+    pending.reject(new Error('late guest failure'));
+    await attaching;
+
+    expect(terminal.write).not.toHaveBeenCalled();
+  });
+
   it('AC-4: preserves the StackBlitz control lane', async () => {
     const shellProcess = { kill: vi.fn(), resize: vi.fn() };
     const boltTerminal = { init: vi.fn() };
@@ -141,5 +160,8 @@ describe('TerminalStore runtime selection', () => {
     expect(mocks.newShellProcess).toHaveBeenCalledWith(await runtime, terminal);
     expect(boltTerminal.init).toHaveBeenCalledWith(await runtime, terminal);
     expect(mocks.createNexariTerminalSession).not.toHaveBeenCalled();
+
+    store.dispose();
+    expect(shellProcess.kill).not.toHaveBeenCalled();
   });
 });
