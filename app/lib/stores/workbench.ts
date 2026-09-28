@@ -158,6 +158,11 @@ export class WorkbenchStore {
     this.#terminalStore.onTerminalResize(cols, rows);
   }
 
+  /** Dispose ephemeral terminal sessions before this HMR instance is replaced. */
+  dispose() {
+    this.#terminalStore.dispose();
+  }
+
   setDocuments(files: FileMap) {
     this.#editorStore.setDocuments(files);
 
@@ -945,3 +950,9 @@ export class WorkbenchStore {
 }
 
 export const workbenchStore = new WorkbenchStore();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    workbenchStore.dispose();
+  });
+}

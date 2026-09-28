@@ -10,6 +10,7 @@ export class TerminalStore {
   #runtime: Promise<unknown>;
   #backend: RuntimeBackend;
   #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess | TerminalSession }> = [];
+  #terminalGenerations = new Map<ITerminal, number>();
   #boltTerminal = newBoltShellProcess();
 
   showTerminal: WritableAtom<boolean> = import.meta.hot?.data.showTerminal ?? atom(true);
@@ -60,13 +61,25 @@ export class TerminalStore {
   }
 
   private async _attachNexariTerminal(terminal: ITerminal) {
+    let generation: number | undefined;
+
     try {
       await this.detachTerminal(terminal);
+      generation = this.#terminalGenerations.get(terminal);
 
       const session = await createNexariTerminalSession(this.#runtime, terminal);
+
+      if (generation !== this.#terminalGenerations.get(terminal)) {
+        session.kill();
+
+        return;
+      }
+
       this.#terminals.push({ terminal, process: session });
     } catch (error: any) {
-      terminal.write(coloredText.red('Failed to spawn nexari shell\n\n') + error.message);
+      if (generation === this.#terminalGenerations.get(terminal)) {
+        terminal.write(coloredText.red('Failed to spawn nexari shell\n\n') + error.message);
+      }
     }
   }
 
@@ -76,7 +89,31 @@ export class TerminalStore {
     }
   }
 
+  /**
+   * Terminal sessions are owned by this store rather than the runtime cache.
+   * Clear the registry before killing so repeated teardown/HMR disposal is
+   * idempotent and no stale session receives later resize calls.
+   */
+  dispose() {
+    const terminals = this.#terminals;
+    this.#terminals = [];
+
+    for (const [terminal, generation] of this.#terminalGenerations) {
+      this.#terminalGenerations.set(terminal, generation + 1);
+    }
+
+    for (const { process } of terminals) {
+      try {
+        process.kill();
+      } catch (error) {
+        console.warn('Failed to kill terminal process:', error);
+      }
+    }
+  }
+
   async detachTerminal(terminal: ITerminal) {
+    this.#terminalGenerations.set(terminal, (this.#terminalGenerations.get(terminal) ?? 0) + 1);
+
     const terminalIndex = this.#terminals.findIndex((t) => t.terminal === terminal);
 
     if (terminalIndex !== -1) {
