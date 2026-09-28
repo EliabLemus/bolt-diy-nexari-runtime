@@ -186,6 +186,25 @@ describe('createNexariRuntime', () => {
     await expect(lateSpawn).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
   });
 
+  it('contains a rejected exit from an interactive spawn that resolves after teardown', async () => {
+    const { guest, process } = createGuest();
+    const late = deferred<NexariGuestProcess>();
+    const exitFailure = new Error('late interactive shell failed');
+    process.exit = Promise.reject(exitFailure);
+    vi.mocked(guest.spawn).mockReturnValueOnce(late.promise);
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
+    await runtime.boot();
+
+    const spawning = runtime.spawn('sh');
+    await runtime.teardown();
+    late.resolve(process);
+
+    await expect(spawning).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+    await new Promise(setImmediate);
+    expect(process.kill).toHaveBeenCalledOnce();
+  });
+
   it('contains rejected interactive exits and removes settled interactive processes before teardown', async () => {
     const fulfilled = createGuest();
     const rejected = createGuest();

@@ -115,6 +115,8 @@ class NexariRuntimeAdapter implements NexariRuntime {
     const process = await this.#guest!.spawn(command, args, options);
 
     if (this.#state !== 'ready') {
+      /* The discarded process can reject on exit after teardown. */
+      void process.exit.catch(() => undefined);
       process.kill();
       throw new NexariRuntimeTerminatedError();
     }
