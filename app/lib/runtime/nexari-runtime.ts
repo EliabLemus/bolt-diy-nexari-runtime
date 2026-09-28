@@ -120,7 +120,10 @@ class NexariRuntimeAdapter implements NexariRuntime {
     }
 
     this.#activeInteractiveProcesses.add(process);
-    void process.exit.finally(() => this.#activeInteractiveProcesses.delete(process));
+    void process.exit.then(
+      () => this.#activeInteractiveProcesses.delete(process),
+      () => this.#activeInteractiveProcesses.delete(process),
+    );
 
     return process;
   }

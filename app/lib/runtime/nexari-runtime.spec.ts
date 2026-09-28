@@ -18,11 +18,13 @@ function stream(contents: string): ReadableStream<string> {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
 
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createGuest() {
@@ -182,6 +184,33 @@ describe('createNexariRuntime', () => {
     expect(interactive.kill).toHaveBeenCalledOnce();
 
     await expect(lateSpawn).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+  });
+
+  it('contains rejected interactive exits and removes settled interactive processes before teardown', async () => {
+    const fulfilled = createGuest();
+    const rejected = createGuest();
+    const fulfilledExit = deferred<number>();
+    const rejectedExit = deferred<number>();
+    fulfilled.process.exit = fulfilledExit.promise;
+    rejected.process.exit = rejectedExit.promise;
+
+    const fulfilledRuntime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(fulfilled.guest) });
+    const rejectedRuntime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(rejected.guest) });
+
+    await fulfilledRuntime.boot();
+    await rejectedRuntime.boot();
+    await fulfilledRuntime.spawn('sh');
+    await rejectedRuntime.spawn('sh');
+
+    fulfilledExit.resolve(0);
+    rejectedExit.reject(new Error('interactive shell failed'));
+    await new Promise(setImmediate);
+
+    await fulfilledRuntime.teardown();
+    await rejectedRuntime.teardown();
+
+    expect(fulfilled.process.kill).not.toHaveBeenCalled();
+    expect(rejected.process.kill).not.toHaveBeenCalled();
   });
 
   it('contains a guest teardown rejection when boot resolves after teardown', async () => {
