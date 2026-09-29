@@ -165,6 +165,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
       const spawnedProcess = this.#guest!.spawn('sh', ['-c', command], { signal: spawnController.signal }).then(
         (lateProcess) => {
           if (killed || this.#state !== 'ready') {
+            void lateProcess.exit.catch(() => undefined);
             lateProcess.kill();
           }
 

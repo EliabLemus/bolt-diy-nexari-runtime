@@ -141,6 +141,24 @@ describe('createNexariRuntime', () => {
     expect(process.kill).toHaveBeenCalledOnce();
   });
 
+  it('contains a rejected exit from an action spawn that resolves after teardown', async () => {
+    const { guest, process } = createGuest();
+    const late = deferred<NexariGuestProcess>();
+    process.exit = Promise.reject(new Error('late action process failed'));
+    vi.mocked(guest.spawn).mockReturnValueOnce(late.promise);
+
+    const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
+    await runtime.boot();
+
+    const command = runtime.runActionCommand('npm run build');
+    await runtime.teardown();
+    await expect(command).rejects.toBeInstanceOf(NexariRuntimeTerminatedError);
+    late.resolve(process);
+
+    await new Promise(setImmediate);
+    expect(process.kill).toHaveBeenCalledOnce();
+  });
+
   it('cancels an active action immediately when teardown begins', async () => {
     const { guest, process } = createGuest();
     const exit = deferred<number>();
