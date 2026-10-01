@@ -1,0 +1,65 @@
+{
+  "packages": [
+    {
+      "name": "@nexari/runtime-contract",
+      "filename": "nexari-runtime-contract-0.1.0-dev.tgz",
+      "version": "0.1.0-dev",
+      "files": [
+        "dist/capabilities.d.ts",
+        "dist/capabilities.js",
+        "dist/errors.d.ts",
+        "dist/errors.js",
+        "dist/index.d.ts",
+        "dist/index.js",
+        "dist/terminal-seam.d.ts",
+        "dist/terminal-seam.js",
+        "package.json"
+      ]
+    },
+    {
+      "name": "@vivari/core",
+      "filename": "vivari-core-1.0.0.tgz",
+      "version": "1.0.0",
+      "files": [
+        "README.md",
+        "dist/assets/debugger-BmIf5DvV.js",
+        "dist/assets/fetcher-worker-C1Js6dV_.js",
+        "dist/assets/fs-worker-DX3wXCHJ.js",
+        "dist/assets/kernel-worker-JoVB2LPb.js",
+        "dist/assets/process-worker-Ca-7DSNb.js",
+        "dist/assets/python-lsp-worker-CzNpG4SI.js",
+        "dist/assets/sw.js",
+        "dist/bridge.d.ts",
+        "dist/bridge.d.ts.map",
+        "dist/errors.d.ts",
+        "dist/errors.d.ts.map",
+        "dist/fs.d.ts",
+        "dist/fs.d.ts.map",
+        "dist/index.d.ts",
+        "dist/index.d.ts.map",
+        "dist/index.js",
+        "dist/mount.d.ts",
+        "dist/mount.d.ts.map",
+        "dist/process.d.ts",
+        "dist/process.d.ts.map",
+        "dist/types.d.ts",
+        "dist/types.d.ts.map",
+        "dist/vivari.d.ts",
+        "dist/vivari.d.ts.map",
+        "package.json"
+      ]
+    },
+    {
+      "name": "@nexari/vivari-adapter",
+      "filename": "nexari-vivari-adapter-0.1.0-dev.tgz",
+      "version": "0.1.0-dev",
+      "files": [
+        "dist/index.d.ts",
+        "dist/index.js",
+        "dist/terminal-seam.d.ts",
+        "dist/terminal-seam.js",
+        "package.json"
+      ]
+    }
+  ]
+}

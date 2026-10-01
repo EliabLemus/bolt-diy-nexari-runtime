@@ -37,6 +37,23 @@ const productionDependencies: BrowserRuntimeBootstrapDependencies = {
       forwardPreviewErrors: true,
     });
   },
+
+  /*
+   * The vendored adapter owns the Vivari SDK import. Keep this composition
+   * dynamic so the StackBlitz control path neither loads nor bundles it, and
+   * the Nexari path never evaluates @webcontainer/api.
+   */
+  bootNexari: async () => {
+    const [{ createAppNexariBootFactory }, { createVivariRuntime, loadPinnedVivariSdk }] = await Promise.all([
+      import('./nexari-app-boot'),
+      import('@nexari/vivari-adapter'),
+    ]);
+
+    return createAppNexariBootFactory({
+      loadSdk: loadPinnedVivariSdk,
+      createVivariRuntime,
+    })();
+  },
 };
 
 /**
