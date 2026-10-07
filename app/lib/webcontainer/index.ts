@@ -1,7 +1,6 @@
 import type { WebContainer } from '@webcontainer/api';
 import { createBrowserRuntime } from '~/lib/runtime/browser-runtime';
 import { configuredRuntimeBackend, type RuntimeBackend } from '~/lib/runtime/runtime-selector';
-import { wireStackblitzPreview } from '~/lib/webcontainer/preview-wiring';
 
 interface WebContainerContext {
   loaded: boolean;
@@ -58,6 +57,7 @@ if (!import.meta.env.SSR) {
          * skips this wiring entirely instead of failing boot on a refusal.
          */
         if (runtimeBackend === 'stackblitz') {
+          const { wireStackblitzPreview } = await import('./preview-wiring');
           await wireStackblitzPreview(webcontainer);
         }
 

@@ -114,14 +114,15 @@ describe('wireStackblitzPreview', () => {
 });
 
 describe('app consumer seam', () => {
-  it('gates preview wiring on the stackblitz backend so the nexari path never wires preview scripts', async () => {
+  it('loads preview wiring only inside the stackblitz backend gate so SSR cannot traverse its workbench import cycle', async () => {
     const source = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
 
     expect(source).toMatch(/runtimeBackend\s*===\s*'stackblitz'/);
+    expect(source).not.toMatch(/from\s*['"]\.\/preview-wiring['"]/);
 
-    // The call must sit inside the gate block, and be its only call site.
+    // The dynamic import and call must stay ordered inside the only stackblitz gate.
     expect(source).toMatch(
-      /if\s*\(\s*runtimeBackend\s*===\s*'stackblitz'\s*\)\s*\{[\s\S]*?await wireStackblitzPreview\(/,
+      /if\s*\(\s*runtimeBackend\s*===\s*'stackblitz'\s*\)\s*\{[\s\S]*?await import\(['"]\.\/preview-wiring['"]\)[\s\S]*?await wireStackblitzPreview\(/,
     );
     expect(source.match(/await wireStackblitzPreview\(/g)).toHaveLength(1);
   });
