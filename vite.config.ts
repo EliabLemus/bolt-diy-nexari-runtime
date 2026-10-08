@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { cloudflareDevProxyVitePlugin as remixCloudflareDevProxy, vitePlugin as remixVitePlugin } from '@remix-run/dev';
 import UnoCSS from 'unocss/vite';
 import { defineConfig, type ViteDevServer } from 'vite';
@@ -6,6 +8,26 @@ import { optimizeCssModules } from 'vite-plugin-optimize-css-modules';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import * as dotenv from 'dotenv';
 import { createNexariBrowserAssetsPlugin } from './app/lib/runtime/nexari-browser-assets-vite-plugin';
+
+type NexariBrowserAssetsManifest = {
+  packages: Array<{ name: string; filename: string; sha256?: string }>;
+};
+
+const nexariBrowserAssetsManifestUrl = new URL('./vendor/nexari-browser-stack/manifest.json', import.meta.url);
+const nexariBrowserAssetsManifest = JSON.parse(
+  readFileSync(fileURLToPath(nexariBrowserAssetsManifestUrl), 'utf8'),
+) as NexariBrowserAssetsManifest;
+const nexariBrowserAssets = nexariBrowserAssetsManifest.packages.find(
+  (entry) => entry.name === '@nexari/vivari-browser-assets',
+);
+
+if (!nexariBrowserAssets?.sha256) {
+  throw new Error('Nexari browser-assets manifest is missing its immutable checksum');
+}
+
+const nexariBrowserAssetsArchivePath = fileURLToPath(
+  new URL(`./vendor/nexari-browser-stack/${nexariBrowserAssets.filename}`, import.meta.url),
+);
 
 // Load environment variables from multiple files
 dotenv.config({ path: '.env.local' });
@@ -56,7 +78,11 @@ export default defineConfig((config) => {
       UnoCSS(),
       tsconfigPaths(),
       chrome129IssuePlugin(),
-      createNexariBrowserAssetsPlugin({ enabled: process.env.VITE_RUNTIME_BACKEND === 'nexari' }),
+      createNexariBrowserAssetsPlugin({
+        enabled: process.env.VITE_RUNTIME_BACKEND === 'nexari',
+        archivePath: nexariBrowserAssetsArchivePath,
+        archiveSha256: nexariBrowserAssets.sha256,
+      }),
       config.mode === 'production' && optimizeCssModules({ apply: 'build' }),
     ],
     envPrefix: [

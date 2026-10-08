@@ -1,6 +1,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Plugin, ViteDevServer } from 'vite';
+import { prepareNexariBrowserAssets } from './nexari-browser-assets-extract';
 
 const ALLOWED_EXACT_PATHS = new Map<string, string>([
   ['/sw.js', 'sw.js'],
@@ -13,6 +14,8 @@ export const NEXARI_BROWSER_ASSETS_DIRECTORY = path.resolve('vendor/nexari-brows
 
 export interface NexariBrowserAssetsPluginOptions {
   enabled: boolean;
+  archivePath?: string;
+  archiveSha256?: string;
   assetsRoot?: string;
 }
 
@@ -162,10 +165,27 @@ async function serveAsset(
 
 export function createNexariBrowserAssetsPlugin({
   enabled,
+  archivePath,
+  archiveSha256,
   assetsRoot = NEXARI_BROWSER_ASSETS_DIRECTORY,
 }: NexariBrowserAssetsPluginOptions): Plugin {
   return {
     name: 'nexari-browser-assets',
+    async configResolved() {
+      if (!enabled) {
+        return;
+      }
+
+      if (!archivePath || !archiveSha256) {
+        throw new Error('Nexari browser-assets archive identity is required when the nexari backend is selected');
+      }
+
+      await prepareNexariBrowserAssets({
+        archivePath,
+        destinationDirectory: assetsRoot,
+        sha256: archiveSha256,
+      });
+    },
     configureServer(server: ViteDevServer) {
       if (!enabled) {
         return;

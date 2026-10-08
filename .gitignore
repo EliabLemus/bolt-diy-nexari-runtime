@@ -36,6 +36,9 @@ _worker.bundle
 Modelfile
 modelfiles
 
+# generated from the checksum-pinned Nexari browser-assets archive by Vite
+/vendor/nexari-browser-stack/browser-assets/
+
 # docs ignore
 site
 

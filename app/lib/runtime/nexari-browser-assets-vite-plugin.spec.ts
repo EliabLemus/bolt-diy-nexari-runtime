@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexariBrowserAssetsPlugin } from './nexari-browser-assets-vite-plugin';
 
@@ -57,6 +59,21 @@ function configurePlugin(plugin: ReturnType<typeof createNexariBrowserAssetsPlug
   configureServer.handler(server as never);
 }
 
+async function resolvePluginConfig(plugin: ReturnType<typeof createNexariBrowserAssetsPlugin>) {
+  const configResolved = plugin.configResolved;
+
+  if (!configResolved) {
+    throw new Error('Nexari browser-assets plugin did not register a configResolved hook');
+  }
+
+  if (typeof configResolved === 'function') {
+    await configResolved({} as never);
+    return;
+  }
+
+  await configResolved.handler({} as never);
+}
+
 function installMiddleware(assetsRoot: string): Middleware {
   const plugin = createNexariBrowserAssetsPlugin({ enabled: true, assetsRoot });
   let middleware: Middleware | undefined;
@@ -94,11 +111,67 @@ async function request(middleware: Middleware, url: string, method = 'GET') {
 
 const tempDirectories: string[] = [];
 
+function writeString(target: Buffer, offset: number, length: number, value: string) {
+  Buffer.from(value, 'utf8').copy(target, offset, 0, length);
+}
+
+function createBrowserAssetsArchive() {
+  const body = Buffer.from('self.skipWaiting();\n', 'utf8');
+  const header = Buffer.alloc(512, 0);
+  writeString(header, 0, 100, 'package/dist/sw.js');
+  writeString(header, 100, 8, '0000644\0');
+  writeString(header, 124, 12, `${body.length.toString(8).padStart(11, '0')}\0`);
+  header.fill(0x20, 148, 156);
+  writeString(header, 156, 1, '0');
+  writeString(header, 257, 6, 'ustar\0');
+  writeString(header, 263, 2, '00');
+
+  let checksum = 0;
+
+  for (const byte of header) {
+    checksum += byte;
+  }
+
+  writeString(header, 148, 8, `${checksum.toString(8).padStart(6, '0')}\0 `);
+
+  return gzipSync(Buffer.concat([header, body, Buffer.alloc(512 - body.length), Buffer.alloc(1024)]));
+}
+
+async function createArchiveFixture() {
+  const directory = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-plugin-'));
+  tempDirectories.push(directory);
+
+  const archive = createBrowserAssetsArchive();
+  const archivePath = path.join(directory, 'browser-assets.tgz');
+  await writeFile(archivePath, archive);
+
+  return {
+    archivePath,
+    assetsRoot: path.join(directory, 'consumer-assets'),
+    sha256: createHash('sha256').update(archive).digest('hex'),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe('createNexariBrowserAssetsPlugin', () => {
+  it('materializes the checksum-pinned tarball into the consumer destination before Vite serves it', async () => {
+    const fixture = await createArchiveFixture();
+    const plugin = createNexariBrowserAssetsPlugin({
+      enabled: true,
+      assetsRoot: fixture.assetsRoot,
+      archivePath: fixture.archivePath,
+      archiveSha256: fixture.sha256,
+    });
+
+    expect(plugin.configResolved).toBeDefined();
+    await resolvePluginConfig(plugin);
+
+    await expect(readFile(path.join(fixture.assetsRoot, 'dist/sw.js'), 'utf8')).resolves.toBe('self.skipWaiting();\n');
+  });
+
   it('serves the root service worker with its required isolation and scope headers', async () => {
     const assetsRoot = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-'));
     tempDirectories.push(assetsRoot);
@@ -187,8 +260,8 @@ describe('createNexariBrowserAssetsPlugin', () => {
     expect(viteConfig).toContain(
       "import { createNexariBrowserAssetsPlugin } from './app/lib/runtime/nexari-browser-assets-vite-plugin';",
     );
-    expect(viteConfig).toContain(
-      "createNexariBrowserAssetsPlugin({ enabled: process.env.VITE_RUNTIME_BACKEND === 'nexari' })",
+    expect(viteConfig).toMatch(
+      /createNexariBrowserAssetsPlugin\(\{\s*enabled: process\.env\.VITE_RUNTIME_BACKEND === 'nexari',\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*\}\)/,
     );
   });
 });
