@@ -1,5 +1,6 @@
 import type { WebContainer } from '@webcontainer/api';
 import { atom } from 'nanostores';
+import { isNexariFacade } from '~/lib/runtime/nexari-surface';
 
 // Extend Window interface to include our custom property
 declare global {
@@ -168,6 +169,15 @@ export class PreviewsStore {
 
   async #init() {
     const webcontainer = await this.#webcontainer;
+
+    /*
+     * Vivari does not implement WebContainer preview lifecycle events. The
+     * backend already exposes this as a typed unsupported capability; skip
+     * StackBlitz-only subscription rather than creating an unhandled rejection.
+     */
+    if (isNexariFacade(webcontainer)) {
+      return;
+    }
 
     // Listen for server ready events
     webcontainer.on('server-ready', (port, url) => {
