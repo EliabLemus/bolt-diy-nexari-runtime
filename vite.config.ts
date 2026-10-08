@@ -32,12 +32,16 @@ const nexariBrowserAssetsArchivePath = fileURLToPath(
   new URL(`./vendor/nexari-browser-stack/${nexariBrowserAssets.filename}`, import.meta.url),
 );
 
-const isNexariBackend = process.env.VITE_RUNTIME_BACKEND === 'nexari';
-
 // Load environment variables from multiple files
 dotenv.config({ path: '.env.local' });
 dotenv.config({ path: '.env' });
 dotenv.config();
+
+/*
+ * Evaluate the runtime selector only after dotenv has loaded .env/.env.local so
+ * an env-file supplied selector behaves exactly like a shell-supplied one.
+ */
+const isNexariBackend = process.env.VITE_RUNTIME_BACKEND === 'nexari';
 
 export default defineConfig((config) => {
   return {

@@ -285,6 +285,15 @@ describe('createNexariBrowserAssetsPlugin', () => {
       /createNexariBrowserAssetsPlugin\(\{\s*enabled: isNexariBackend,\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*\}\)/,
     );
     expect(viteConfig).toMatch(/const isNexariBackend = process\.env\.VITE_RUNTIME_BACKEND === 'nexari';/);
+
+    const selectorDeclaration = viteConfig.indexOf(
+      "const isNexariBackend = process.env.VITE_RUNTIME_BACKEND === 'nexari';",
+    );
+    const lastDotenvLoad = viteConfig.lastIndexOf('dotenv.config(');
+
+    expect(selectorDeclaration).toBeGreaterThan(-1);
+    expect(lastDotenvLoad).toBeGreaterThan(-1);
+    expect(selectorDeclaration).toBeGreaterThan(lastDotenvLoad);
   });
 
   it('sets cross-origin isolation on the Nexari application document, not only asset responses', async () => {
