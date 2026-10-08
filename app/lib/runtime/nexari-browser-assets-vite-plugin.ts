@@ -146,7 +146,11 @@ async function serveAsset(
   const candidate = path.resolve(root, route.relativePath);
 
   try {
-    if (!route.relativePath || !isContained(root, candidate) || !(await hasNoSymlinkPathSegment(root, candidate))) {
+    if (
+      !route.relativePath ||
+      !isContained(root, candidate) ||
+      !(await hasNoSymlinkPathSegment(assetsRoot, candidate))
+    ) {
       sendNotFound(response);
       return true;
     }

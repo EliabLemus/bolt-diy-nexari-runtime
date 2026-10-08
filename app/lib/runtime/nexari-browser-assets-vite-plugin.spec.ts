@@ -242,6 +242,22 @@ describe('createNexariBrowserAssetsPlugin', () => {
     }
   });
 
+  it('rejects an assets root symlink so requests cannot escape the vendored destination', async () => {
+    const assetsRootParent = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-link-'));
+    const outsideRoot = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-outside-'));
+    const assetsRoot = path.join(assetsRootParent, 'browser-assets');
+    tempDirectories.push(assetsRootParent, outsideRoot);
+    await mkdir(path.join(outsideRoot, 'dist'), { recursive: true });
+    await writeFile(path.join(outsideRoot, 'dist/sw.js'), 'outside\n');
+    await symlink(outsideRoot, assetsRoot);
+
+    const { response, passedThrough } = await request(installMiddleware(assetsRoot), '/sw.js');
+
+    expect(passedThrough).toBe(false);
+    expect(response.statusCode).toBe(404);
+    expect(response.body()).toBe('');
+  });
+
   it('sets isolation headers on the Nexari application document before passing it to Remix', async () => {
     const assetsRoot = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-'));
     tempDirectories.push(assetsRoot);
