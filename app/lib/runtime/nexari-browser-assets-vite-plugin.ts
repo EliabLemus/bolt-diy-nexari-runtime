@@ -28,9 +28,15 @@ type MiddlewareResponse = {
 
 type AssetRoute = { relativePath: string } | undefined;
 
+export const NEXARI_ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+} as const;
+
 function setIsolationHeaders(response: MiddlewareResponse) {
-  response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  for (const [name, value] of Object.entries(NEXARI_ISOLATION_HEADERS)) {
+    response.setHeader(name, value);
+  }
 }
 
 function contentTypeFor(relativePath: string) {
@@ -190,6 +196,11 @@ export function createNexariBrowserAssetsPlugin({
       if (!enabled) {
         return;
       }
+
+      server.middlewares.use((_request, response, next) => {
+        setIsolationHeaders(response);
+        next();
+      });
 
       server.middlewares.use((request, response, next) => {
         void serveAsset(request, response, assetsRoot).then((handled) => {

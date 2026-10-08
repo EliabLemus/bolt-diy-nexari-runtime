@@ -7,7 +7,10 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { optimizeCssModules } from 'vite-plugin-optimize-css-modules';
 import tsconfigPaths from 'vite-tsconfig-paths';
 import * as dotenv from 'dotenv';
-import { createNexariBrowserAssetsPlugin } from './app/lib/runtime/nexari-browser-assets-vite-plugin';
+import {
+  NEXARI_ISOLATION_HEADERS,
+  createNexariBrowserAssetsPlugin,
+} from './app/lib/runtime/nexari-browser-assets-vite-plugin';
 
 type NexariBrowserAssetsManifest = {
   packages: Array<{ name: string; filename: string; sha256?: string }>;
@@ -29,6 +32,8 @@ const nexariBrowserAssetsArchivePath = fileURLToPath(
   new URL(`./vendor/nexari-browser-stack/${nexariBrowserAssets.filename}`, import.meta.url),
 );
 
+const isNexariBackend = process.env.VITE_RUNTIME_BACKEND === 'nexari';
+
 // Load environment variables from multiple files
 dotenv.config({ path: '.env.local' });
 dotenv.config({ path: '.env' });
@@ -42,6 +47,7 @@ export default defineConfig((config) => {
     build: {
       target: 'esnext',
     },
+    server: isNexariBackend ? { headers: NEXARI_ISOLATION_HEADERS } : undefined,
     plugins: [
       nodePolyfills({
         include: ['buffer', 'process', 'util', 'stream'],
@@ -79,7 +85,7 @@ export default defineConfig((config) => {
       tsconfigPaths(),
       chrome129IssuePlugin(),
       createNexariBrowserAssetsPlugin({
-        enabled: process.env.VITE_RUNTIME_BACKEND === 'nexari',
+        enabled: isNexariBackend,
         archivePath: nexariBrowserAssetsArchivePath,
         archiveSha256: nexariBrowserAssets.sha256,
       }),

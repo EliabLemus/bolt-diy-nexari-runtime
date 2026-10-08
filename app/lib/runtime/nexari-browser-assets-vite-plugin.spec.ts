@@ -76,21 +76,31 @@ async function resolvePluginConfig(plugin: ReturnType<typeof createNexariBrowser
 
 function installMiddleware(assetsRoot: string): Middleware {
   const plugin = createNexariBrowserAssetsPlugin({ enabled: true, assetsRoot });
-  let middleware: Middleware | undefined;
+  const middlewares: Middleware[] = [];
 
   configurePlugin(plugin, {
     middlewares: {
       use(handler: Middleware) {
-        middleware = handler;
+        middlewares.push(handler);
       },
     },
   });
 
-  if (!middleware) {
+  if (middlewares.length === 0) {
     throw new Error('Nexari browser-assets plugin did not install its middleware');
   }
 
-  return middleware;
+  return async (request, response, next) => {
+    let middlewareIndex = 0;
+
+    const runNext = (): void | Promise<void> => {
+      const middleware = middlewares[middlewareIndex++];
+
+      return middleware ? middleware(request, response, runNext) : next();
+    };
+
+    await runNext();
+  };
 }
 
 async function request(middleware: Middleware, url: string, method = 'GET') {
@@ -232,6 +242,17 @@ describe('createNexariBrowserAssetsPlugin', () => {
     }
   });
 
+  it('sets isolation headers on the Nexari application document before passing it to Remix', async () => {
+    const assetsRoot = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-'));
+    tempDirectories.push(assetsRoot);
+
+    const { response, passedThrough } = await request(installMiddleware(assetsRoot), '/');
+
+    expect(passedThrough).toBe(true);
+    expect(response.headers.get('cross-origin-opener-policy')).toBe('same-origin');
+    expect(response.headers.get('cross-origin-embedder-policy')).toBe('require-corp');
+  });
+
   it('passes non-Nexari routes through and installs no middleware when disabled', async () => {
     const assetsRoot = await mkdtemp(path.join(tmpdir(), 'nexari-browser-assets-'));
     tempDirectories.push(assetsRoot);
@@ -257,11 +278,24 @@ describe('createNexariBrowserAssetsPlugin', () => {
     const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
     const viteConfig = await readFile(path.join(repositoryRoot, 'vite.config.ts'), 'utf8');
 
-    expect(viteConfig).toContain(
-      "import { createNexariBrowserAssetsPlugin } from './app/lib/runtime/nexari-browser-assets-vite-plugin';",
+    expect(viteConfig).toMatch(
+      /import \{[^}]*createNexariBrowserAssetsPlugin[^}]*\} from '\.\/app\/lib\/runtime\/nexari-browser-assets-vite-plugin';/,
     );
     expect(viteConfig).toMatch(
-      /createNexariBrowserAssetsPlugin\(\{\s*enabled: process\.env\.VITE_RUNTIME_BACKEND === 'nexari',\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*\}\)/,
+      /createNexariBrowserAssetsPlugin\(\{\s*enabled: isNexariBackend,\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*\}\)/,
+    );
+    expect(viteConfig).toMatch(/const isNexariBackend = process\.env\.VITE_RUNTIME_BACKEND === 'nexari';/);
+  });
+
+  it('sets cross-origin isolation on the Nexari application document, not only asset responses', async () => {
+    const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+    const viteConfig = await readFile(path.join(repositoryRoot, 'vite.config.ts'), 'utf8');
+
+    expect(viteConfig).toMatch(
+      /import \{[^}]*NEXARI_ISOLATION_HEADERS[^}]*\} from '\.\/app\/lib\/runtime\/nexari-browser-assets-vite-plugin';/,
+    );
+    expect(viteConfig).toMatch(
+      /server:\s*isNexariBackend\s*\?\s*\{\s*headers:\s*NEXARI_ISOLATION_HEADERS\s*\}\s*:\s*undefined/,
     );
   });
 });
