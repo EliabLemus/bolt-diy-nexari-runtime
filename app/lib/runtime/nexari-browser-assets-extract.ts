@@ -112,19 +112,28 @@ function resolveContained(root: string, relativePath: string): string {
   return candidate;
 }
 
-async function rejectSymlinkedDestinationParent(destinationDirectory: string): Promise<void> {
-  const destinationParent = path.dirname(destinationDirectory);
+async function rejectSymlinkedDestinationPath(destinationRoot: string, destinationDirectory: string): Promise<void> {
+  const relativeDestination = path.relative(destinationRoot, destinationDirectory);
 
-  try {
-    if ((await lstat(destinationParent)).isSymbolicLink()) {
-      throw new Error(`refusing to use symlinked destination ancestor: ${destinationParent}`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`refusing to use missing destination parent: ${destinationParent}`);
+  if (
+    !relativeDestination ||
+    relativeDestination === '..' ||
+    relativeDestination.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeDestination)
+  ) {
+    throw new Error(`refusing to use destination outside archive root: ${destinationDirectory}`);
+  }
+
+  let current = destinationRoot;
+
+  for (const segment of relativeDestination.split(path.sep)) {
+    const stats = await lstat(current);
+
+    if (stats.isSymbolicLink()) {
+      throw new Error(`refusing to use symlinked destination ancestor: ${current}`);
     }
 
-    throw error;
+    current = path.join(current, segment);
   }
 }
 
@@ -201,7 +210,7 @@ export async function prepareNexariBrowserAssets({
   const resolvedArchivePath = path.resolve(archivePath);
   const resolvedDestinationDirectory = path.resolve(destinationDirectory);
 
-  await rejectSymlinkedDestinationParent(resolvedDestinationDirectory);
+  await rejectSymlinkedDestinationPath(path.dirname(resolvedArchivePath), resolvedDestinationDirectory);
 
   const archive = await readFile(resolvedArchivePath);
   const actualSha256 = createHash('sha256').update(archive).digest('hex');

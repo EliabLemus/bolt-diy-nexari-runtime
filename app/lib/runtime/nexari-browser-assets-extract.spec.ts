@@ -196,6 +196,26 @@ describe('prepareNexariBrowserAssets', () => {
     });
   });
 
+  it('rejects a symlinked grandparent before it writes outside the consumer tree', async () => {
+    const fixture = await createFixture([{ path: 'package/dist/sw.js', body: 'safe\n' }]);
+    const destinationRoot = path.dirname(fixture.destinationDirectory);
+    const outsideDirectory = path.join(destinationRoot, 'outside');
+    const linkedGrandparent = path.join(destinationRoot, 'linked-grandparent');
+    await mkdir(path.join(outsideDirectory, 'nested'), { recursive: true });
+    await symlink(outsideDirectory, linkedGrandparent);
+
+    const linkedDestination = path.join(linkedGrandparent, 'nested', path.basename(fixture.destinationDirectory));
+
+    await expect(prepareNexariBrowserAssets({ ...fixture, destinationDirectory: linkedDestination })).rejects.toThrow(
+      'refusing to use symlinked destination ancestor',
+    );
+    await expect(
+      readFile(path.join(outsideDirectory, 'nested', path.basename(fixture.destinationDirectory), 'dist/sw.js')),
+    ).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('rejects a checksum mismatch before it creates a destination directory', async () => {
     const fixture = await createFixture([{ path: 'package/dist/sw.js', body: 'safe\n' }]);
 
