@@ -60,6 +60,21 @@
         "dist/terminal-seam.js",
         "package.json"
       ]
+    },
+    {
+      "name": "@nexari/vivari-browser-assets",
+      "filename": "nexari-vivari-browser-assets-0.1.0-dev.tgz",
+      "version": "0.1.0-dev",
+      "producerCommit": "4e9e71708ffbd3e11aadf6a3fec11ea27f552210",
+      "sha256": "6c97fb8ea6e82ffa3fa5ce27d225d38885e685712ec854669f994d4548b134da",
+      "files": [
+        "dist/assets/**",
+        "dist/vendor/**",
+        "dist/sw.js",
+        "dist/__vv-bridge.html",
+        "dist/__vv-preview-boot.html",
+        "package.json"
+      ]
     }
   ]
 }
