@@ -298,7 +298,10 @@ describe('createNexariBrowserAssetsPlugin', () => {
       /import \{[^}]*createNexariBrowserAssetsPlugin[^}]*\} from '\.\/app\/lib\/runtime\/nexari-browser-assets-vite-plugin';/,
     );
     expect(viteConfig).toMatch(
-      /createNexariBrowserAssetsPlugin\(\{\s*enabled: isNexariBackend,\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*\}\)/,
+      /createNexariBrowserAssetsPlugin\(\{\s*enabled: isNexariBackend,\s*archivePath: nexariBrowserAssetsArchivePath,\s*archiveSha256: nexariBrowserAssets\.sha256,\s*assetsRoot: nexariBrowserAssetsRoot,\s*\}\)/,
+    );
+    expect(viteConfig).toMatch(
+      /const nexariBrowserAssetsRoot = fileURLToPath\(\s*new URL\('\.\/vendor\/nexari-browser-stack\/browser-assets', import\.meta\.url\),\s*\);/,
     );
     expect(viteConfig).toMatch(/const isNexariBackend = process\.env\.VITE_RUNTIME_BACKEND === 'nexari';/);
 

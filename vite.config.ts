@@ -31,6 +31,9 @@ if (!nexariBrowserAssets?.sha256) {
 const nexariBrowserAssetsArchivePath = fileURLToPath(
   new URL(`./vendor/nexari-browser-stack/${nexariBrowserAssets.filename}`, import.meta.url),
 );
+const nexariBrowserAssetsRoot = fileURLToPath(
+  new URL('./vendor/nexari-browser-stack/browser-assets', import.meta.url),
+);
 
 // Load environment variables from multiple files
 dotenv.config({ path: '.env.local' });
@@ -92,6 +95,7 @@ export default defineConfig((config) => {
         enabled: isNexariBackend,
         archivePath: nexariBrowserAssetsArchivePath,
         archiveSha256: nexariBrowserAssets.sha256,
+        assetsRoot: nexariBrowserAssetsRoot,
       }),
       config.mode === 'production' && optimizeCssModules({ apply: 'build' }),
     ],
