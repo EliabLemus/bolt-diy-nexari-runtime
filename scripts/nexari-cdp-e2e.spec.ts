@@ -11,11 +11,16 @@ import {
   NexariCdpPortReservationError,
   NexariCdpSelectorError,
   acquireLoopbackPort,
+  assessNexariEvidence,
   buildChromeArgs,
+  captureNexariBrowserEvidence,
+  classifyNexariResource,
+  connectRawCdp,
   createOwnedProfile,
   inspectCdpCapabilities,
   launchChrome,
   resolveNexariSelector,
+  runNexariE2E,
   startNexariDevServer,
 } from './nexari-cdp-e2e.mjs';
 
@@ -62,6 +67,27 @@ describe('Nexari CDP E2E runner contract', () => {
     expect(remove).toHaveBeenCalledWith('/tmp/nexari-cdp-e2e-owned-profile');
   });
 
+  it('preserves both run and cleanup failures from an owned profile', async () => {
+    const runFailure = new Error('run failed');
+    const cleanupFailure = new Error('cleanup failed');
+
+    await expect(
+      createOwnedProfile(
+        async () => {
+          throw runFailure;
+        },
+        {
+          mkdtemp: vi.fn().mockResolvedValue('/tmp/nexari-cdp-e2e-owned-profile'),
+          remove: vi.fn().mockRejectedValue(cleanupFailure),
+          tempDirectory: '/tmp',
+        },
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof AggregateError && error.errors.includes(runFailure) && error.errors.includes(cleanupFailure),
+    );
+  });
+
   it('reserves a port by binding loopback before releasing it for the owned child', async () => {
     class FakeServer extends EventEmitter {
       close = vi.fn((callback: () => void) => callback());
@@ -100,6 +126,8 @@ describe('Nexari CDP E2E runner contract', () => {
       expect.arrayContaining([
         '--remote-debugging-address=127.0.0.1',
         '--remote-debugging-port=43123',
+        '--remote-allow-origins=*',
+        '--host-resolver-rules=MAP * 0.0.0.0, EXCLUDE 127.0.0.1',
         '--user-data-dir=/tmp/nexari-cdp-e2e-owned-profile',
         '--no-first-run',
         '--no-default-browser-check',
@@ -141,6 +169,234 @@ describe('Nexari CDP E2E runner contract', () => {
         env: expect.objectContaining({ VITE_RUNTIME_BACKEND: 'nexari' }),
       }),
     );
+  });
+
+  it('classifies only same-origin Nexari document, worker, and asset requests as mandatory', () => {
+    const origin = 'http://127.0.0.1:43124';
+
+    expect(classifyNexariResource(`${origin}/`, origin)).toBe('document');
+    expect(classifyNexariResource(`${origin}/sw.js`, origin)).toBe('service-worker');
+    expect(classifyNexariResource(`${origin}/assets/kernel-worker.js`, origin)).toBe('asset');
+    expect(classifyNexariResource(`${origin}/vendor/vivari.js`, origin)).toBe('asset');
+    expect(classifyNexariResource('https://fonts.googleapis.com/css2', origin)).toBeUndefined();
+  });
+
+  it('fails evidence that lacks a mandatory graph response or records a kernel console error', () => {
+    const complete = {
+      responses: [
+        { url: 'http://127.0.0.1:43124/', status: 200 },
+        { url: 'http://127.0.0.1:43124/sw.js', status: 200 },
+        { url: 'http://127.0.0.1:43124/assets/kernel-worker.js', status: 200 },
+      ],
+      failures: [],
+      consoleErrors: [],
+      crossOriginIsolated: true,
+      serviceWorkerScriptUrl: 'http://127.0.0.1:43124/sw.js',
+    };
+
+    expect(assessNexariEvidence(complete, 'http://127.0.0.1:43124').passed).toBe(true);
+    expect(
+      assessNexariEvidence({ ...complete, responses: complete.responses.slice(0, 2) }, 'http://127.0.0.1:43124')
+        .reasons,
+    ).toContain('insufficient-mandatory-asset-evidence');
+    expect(
+      assessNexariEvidence({ ...complete, consoleErrors: ['kernel worker failed to load'] }, 'http://127.0.0.1:43124')
+        .reasons,
+    ).toContain('kernel-worker-console-error');
+  });
+
+  it('enables page domains before navigation and captures auto-attached worker failures', async () => {
+    const calls: Array<{ method: string; sessionId?: string }> = [];
+    let eventListener: ((event: Record<string, unknown>) => void | Promise<void>) | undefined;
+    const cdp = {
+      onEvent(listener: (event: Record<string, unknown>) => void | Promise<void>) {
+        eventListener = listener;
+
+        return () => {
+          eventListener = undefined;
+        };
+      },
+      async send(method: string, _params: Record<string, unknown> = {}, sessionId?: string) {
+        calls.push({ method, sessionId });
+
+        if (method === 'Target.createTarget') {
+          return { targetId: 'page-target' };
+        }
+
+        if (method === 'Target.attachToTarget') {
+          return { sessionId: 'page-session' };
+        }
+
+        if (method === 'Page.navigate') {
+          await eventListener?.({
+            method: 'Target.attachedToTarget',
+            params: { sessionId: 'worker-session', targetInfo: { type: 'service_worker' } },
+          });
+          await eventListener?.({
+            method: 'Network.responseReceived',
+            sessionId: 'page-session',
+            params: { response: { url: 'http://127.0.0.1:43124/', status: 200 } },
+          });
+          await eventListener?.({
+            method: 'Network.responseReceived',
+            sessionId: 'worker-session',
+            params: { response: { url: 'http://127.0.0.1:43124/sw.js', status: 200 } },
+          });
+          await eventListener?.({
+            method: 'Network.loadingFailed',
+            sessionId: 'worker-session',
+            params: { requestId: 'worker-failure', errorText: 'net::ERR_FAILED' },
+          });
+
+          return {};
+        }
+
+        if (method === 'Runtime.evaluate') {
+          return {
+            result: { value: { crossOriginIsolated: true, serviceWorkerScriptUrl: 'http://127.0.0.1:43124/sw.js' } },
+          };
+        }
+
+        return {};
+      },
+      async waitFor(method: string) {
+        expect(method).toBe('Page.loadEventFired');
+      },
+    };
+
+    const evidence = await captureNexariBrowserEvidence({ cdp, appUrl: 'http://127.0.0.1:43124/' });
+    const navigateIndex = calls.findIndex((call) => call.method === 'Page.navigate');
+
+    expect(calls.slice(0, navigateIndex).map((call) => call.method)).toEqual(
+      expect.arrayContaining([
+        'Target.createTarget',
+        'Target.attachToTarget',
+        'Target.setAutoAttach',
+        'Runtime.enable',
+        'Network.enable',
+        'Page.enable',
+      ]),
+    );
+    expect(calls.find((call) => call.method === 'Runtime.enable' && call.sessionId === 'worker-session')).toBeDefined();
+    expect(evidence.failures).toEqual([{ requestId: 'worker-failure', errorText: 'net::ERR_FAILED' }]);
+  });
+
+  it('reloads once after service-worker readiness if the first document has no controller', async () => {
+    const calls: string[] = [];
+    let evaluateCount = 0;
+    const cdp = {
+      onEvent() {
+        return () => undefined;
+      },
+      async send(method: string) {
+        calls.push(method);
+
+        if (method === 'Target.createTarget') {
+          return { targetId: 'page-target' };
+        }
+
+        if (method === 'Target.attachToTarget') {
+          return { sessionId: 'page-session' };
+        }
+
+        if (method === 'Runtime.evaluate') {
+          evaluateCount += 1;
+          return {
+            result: {
+              value:
+                evaluateCount === 1
+                  ? { crossOriginIsolated: true, serviceWorkerScriptUrl: null }
+                  : { crossOriginIsolated: true, serviceWorkerScriptUrl: 'http://127.0.0.1:43124/sw.js' },
+            },
+          };
+        }
+
+        return {};
+      },
+      waitFor() {
+        return Promise.resolve();
+      },
+    };
+
+    const evidence = await captureNexariBrowserEvidence({ cdp, appUrl: 'http://127.0.0.1:43124/' });
+
+    expect(calls.filter((method) => method === 'Page.reload')).toHaveLength(1);
+    expect(evaluateCount).toBe(2);
+    expect(evidence.serviceWorkerScriptUrl).toBe('http://127.0.0.1:43124/sw.js');
+  });
+
+  it('connects raw CDP through an injected WebSocket and routes replies by command id', async () => {
+    class FakeWebSocket {
+      listeners = new Map<string, Array<(event: { data?: string; error?: Error }) => void>>();
+      sent: string[] = [];
+      closed = false;
+
+      constructor() {
+        queueMicrotask(() => this.emit('open', {}));
+      }
+
+      addEventListener(type: string, listener: (event: { data?: string; error?: Error }) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+      }
+
+      emit(type: string, event: { data?: string; error?: Error }) {
+        for (const listener of this.listeners.get(type) ?? []) {
+          listener(event);
+        }
+      }
+
+      send(message: string) {
+        this.sent.push(message);
+
+        const request = JSON.parse(message);
+        queueMicrotask(() =>
+          this.emit('message', { data: JSON.stringify({ id: request.id, result: { product: 'Chrome' } }) }),
+        );
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+
+    const cdp = await connectRawCdp({
+      webSocketUrl: 'ws://127.0.0.1:43123/devtools/browser/test',
+      WebSocket: FakeWebSocket as any,
+    });
+
+    await expect(cdp.send('Browser.getVersion')).resolves.toEqual({ product: 'Chrome' });
+    cdp.close();
+  });
+
+  it('rejects an unapproved E2E run before allocating ports or spawning children', async () => {
+    const acquirePort = vi.fn();
+
+    await expect(
+      runNexariE2E({
+        approvalToken: undefined,
+        dependencies: { acquirePort },
+      } as any),
+    ).rejects.toThrow(NexariCdpApprovalRequiredError);
+    expect(acquirePort).not.toHaveBeenCalled();
+  });
+
+  it('requires the Nexari selector before allocating ports or starting injected children', async () => {
+    const acquirePort = vi.fn();
+    const startServer = vi.fn();
+
+    await expect(
+      runNexariE2E({
+        approvalToken: OWNER_APPROVAL_TOKEN,
+        env: { VITE_RUNTIME_BACKEND: 'stackblitz' },
+        dependencies: {
+          acquirePort,
+          startServer,
+          runtime: { WebSocket: class {}, fetch: vi.fn() },
+        },
+      } as any),
+    ).rejects.toThrow(NexariCdpSelectorError);
+    expect(acquirePort).not.toHaveBeenCalled();
+    expect(startServer).not.toHaveBeenCalled();
   });
 
   it('refuses to launch Chrome until a dedicated owner-approval value is supplied', () => {
