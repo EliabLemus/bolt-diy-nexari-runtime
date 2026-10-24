@@ -228,7 +228,15 @@ export function assessNexariEvidence(evidence, appOrigin) {
     reasons.push('cross-origin-isolation-missing');
   }
 
-  if (new URL(evidence.serviceWorkerScriptUrl ?? appOrigin, appOrigin).pathname !== '/sw.js') {
+  let serviceWorkerController;
+
+  try {
+    serviceWorkerController = new URL(evidence.serviceWorkerScriptUrl ?? '', appOrigin);
+  } catch {
+    serviceWorkerController = undefined;
+  }
+
+  if (serviceWorkerController?.origin !== appOrigin || serviceWorkerController.pathname !== '/sw.js') {
     reasons.push('service-worker-controller-missing');
   }
 
@@ -477,7 +485,14 @@ function drainChild(child) {
 }
 
 function waitForExit(child) {
-  return new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+  if (child.exitCode != null || child.signalCode != null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode ?? null });
+  }
+
+  return new Promise((resolve, reject) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+    child.once('error', reject);
+  });
 }
 
 async function stopChild(child, timeoutMs = 5_000) {
@@ -495,26 +510,37 @@ async function stopChild(child, timeoutMs = 5_000) {
   }
 }
 
-async function waitForJson(url, child, fetchImpl, timeoutMs) {
+async function waitForResponse(url, child, fetchImpl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  const exit = waitForExit(child).then(({ code, signal }) => {
-    throw new Error(`Owned child exited before readiness (code=${code}, signal=${signal}).`);
-  });
+  let childFailure;
+  const exit = waitForExit(child)
+    .then(({ code, signal }) => new Error(`Owned child exited before readiness (code=${code}, signal=${signal}).`))
+    .catch((error) => new Error(`Owned child failed before readiness: ${error.message}`))
+    .then((error) => {
+      childFailure = error;
+      return error;
+    });
 
   while (Date.now() < deadline) {
-    try {
-      const response = await Promise.race([fetchImpl(url), exit]);
-
-      if (response.ok) {
-        return response.json();
-      }
-    } catch (error) {
-      if (error?.message?.startsWith('Owned child exited')) {
-        throw error;
-      }
+    if (childFailure) {
+      throw childFailure;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      const response = await fetchImpl(url);
+
+      if (response.ok) {
+        return response;
+      }
+    } catch {
+      // Poll until readiness or an owned-child failure.
+    }
+
+    if (childFailure) {
+      throw childFailure;
+    }
+
+    await Promise.race([new Promise((resolve) => setTimeout(resolve, 100)), exit]);
   }
 
   throw new Error(`Timed out waiting for ${url}.`);
@@ -559,7 +585,7 @@ export async function runNexariE2E({
   drainChild(server);
 
   try {
-    await waitForJson(appUrl, server, fetchImpl, timeoutMs);
+    await waitForResponse(appUrl, server, fetchImpl, timeoutMs);
 
     return await makeProfile(async (profileDirectory) => {
       const chrome = startChrome({ approvalToken, chromeExecutable, profileDirectory, debugPort });
@@ -568,12 +594,13 @@ export async function runNexariE2E({
       let cdp;
 
       try {
-        const version = await waitForJson(
+        const versionResponse = await waitForResponse(
           `http://${CDP_LOOPBACK_HOST}:${debugPort}/json/version`,
           chrome,
           fetchImpl,
           timeoutMs,
         );
+        const version = await versionResponse.json();
         cdp = await connect({ webSocketUrl: version.webSocketDebuggerUrl, WebSocket: runtime.WebSocket, timeoutMs });
 
         const evidence = await capture({ cdp, appUrl });

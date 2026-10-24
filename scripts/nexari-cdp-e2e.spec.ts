@@ -200,6 +200,12 @@ describe('Nexari CDP E2E runner contract', () => {
         .reasons,
     ).toContain('insufficient-mandatory-asset-evidence');
     expect(
+      assessNexariEvidence(
+        { ...complete, serviceWorkerScriptUrl: 'https://attacker.example/sw.js' },
+        'http://127.0.0.1:43124',
+      ).reasons,
+    ).toContain('service-worker-controller-missing');
+    expect(
       assessNexariEvidence({ ...complete, consoleErrors: ['kernel worker failed to load'] }, 'http://127.0.0.1:43124')
         .reasons,
     ).toContain('kernel-worker-console-error');
@@ -378,6 +384,83 @@ describe('Nexari CDP E2E runner contract', () => {
       } as any),
     ).rejects.toThrow(NexariCdpApprovalRequiredError);
     expect(acquirePort).not.toHaveBeenCalled();
+  });
+
+  it('treats HTML app readiness as ready without attempting JSON decoding', async () => {
+    const server = new EventEmitter() as EventEmitter & { exitCode: number | null };
+    const chrome = new EventEmitter() as EventEmitter & { exitCode: number | null };
+    server.exitCode = null;
+    chrome.exitCode = null;
+
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.reject(new SyntaxError('HTML is not JSON')) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ webSocketDebuggerUrl: 'ws://127.0.0.1:43123/devtools/browser/test' }),
+      });
+    const stopChild = vi.fn().mockResolvedValue(undefined);
+    const capture = vi.fn().mockResolvedValue({
+      responses: [
+        { url: 'http://127.0.0.1:43124/', status: 200 },
+        { url: 'http://127.0.0.1:43124/sw.js', status: 200 },
+        { url: 'http://127.0.0.1:43124/assets/kernel-worker.js', status: 200 },
+      ],
+      failures: [],
+      consoleErrors: [],
+      crossOriginIsolated: true,
+      serviceWorkerScriptUrl: 'http://127.0.0.1:43124/sw.js',
+    });
+    const cdp = { close: vi.fn() };
+
+    await expect(
+      runNexariE2E({
+        approvalToken: OWNER_APPROVAL_TOKEN,
+        env: { VITE_RUNTIME_BACKEND: 'nexari' },
+        dependencies: {
+          acquirePort: vi.fn().mockResolvedValueOnce(43124).mockResolvedValueOnce(43123),
+          startServer: vi.fn().mockReturnValue(server),
+          startChrome: vi.fn().mockReturnValue(chrome),
+          createOwnedProfile: (callback: (profileDirectory: string) => Promise<unknown>) =>
+            callback('/tmp/nexari-cdp-e2e'),
+          fetch,
+          runtime: { WebSocket: class {}, fetch },
+          connect: vi.fn().mockResolvedValue(cdp),
+          capture,
+          stopChild,
+        },
+      } as any),
+    ).resolves.toMatchObject({ passed: true, appUrl: 'http://127.0.0.1:43124/' });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledWith({ cdp, appUrl: 'http://127.0.0.1:43124/' });
+    expect(stopChild).toHaveBeenCalledWith(chrome);
+    expect(stopChild).toHaveBeenCalledWith(server);
+  });
+
+  it('reports an owned child error during readiness without waiting for a timeout', async () => {
+    const server = new EventEmitter() as EventEmitter & { exitCode: number | null };
+    server.exitCode = null;
+
+    const startServer = vi.fn(() => {
+      setTimeout(() => server.emit('error', new Error('spawn ENOENT')), 0);
+      return server;
+    });
+
+    await expect(
+      runNexariE2E({
+        approvalToken: OWNER_APPROVAL_TOKEN,
+        env: { VITE_RUNTIME_BACKEND: 'nexari' },
+        timeoutMs: 10,
+        dependencies: {
+          acquirePort: vi.fn().mockResolvedValueOnce(43124).mockResolvedValueOnce(43123),
+          startServer,
+          fetch: vi.fn().mockRejectedValue(new Error('not ready')),
+          runtime: { WebSocket: class {}, fetch: vi.fn() },
+          stopChild: vi.fn().mockResolvedValue(undefined),
+        },
+      } as any),
+    ).rejects.toThrow('spawn ENOENT');
   });
 
   it('requires the Nexari selector before allocating ports or starting injected children', async () => {
