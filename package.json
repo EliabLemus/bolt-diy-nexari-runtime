@@ -15,6 +15,7 @@
     "build": "remix vite:build",
     "dev": "node pre-start.cjs  && remix vite:dev",
     "test": "vitest --run",
+    "test:nexari-e2e": "node scripts/nexari-cdp-e2e.mjs --help",
     "test:watch": "vitest",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint app",
     "lint:fix": "npm run lint -- --fix && prettier app --write",
