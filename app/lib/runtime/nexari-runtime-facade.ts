@@ -260,6 +260,63 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
     throw new NexariUnsupportedCapabilityError(capability);
   };
 
+  /*
+   * Late-binding queue: the guest exposes its preview event lane only after
+   * boot completes, but consumers (e.g. PreviewsStore) may subscribe before
+   * that. Queued listeners are flushed onto the lane as soon as it appears;
+   * until then their detach functions simply remove them from the queue.
+   */
+  interface PendingListener {
+    event: 'server-ready' | 'port';
+    callback: (...args: unknown[]) => void;
+    detached: boolean;
+    detach?: () => void;
+  }
+
+  const pendingListeners = new Set<PendingListener>();
+  let flushTimer: ReturnType<typeof setInterval> | undefined;
+
+  const flushPendingListeners = () => {
+    const lane = runtime.on;
+
+    if (!lane) {
+      return;
+    }
+
+    for (const pending of [...pendingListeners]) {
+      pendingListeners.delete(pending);
+
+      if (pending.detached) {
+        continue;
+      }
+
+      const detach = lane(pending.event, pending.callback);
+
+      if (pending.detached) {
+        // Detached between the flush and the lane registration.
+        if (typeof detach === 'function') {
+          detach();
+        }
+
+        continue;
+      }
+
+      pending.detach = typeof detach === 'function' ? detach : undefined;
+    }
+
+    if (pendingListeners.size === 0 && flushTimer !== undefined) {
+      clearInterval(flushTimer);
+      flushTimer = undefined;
+    }
+  };
+
+  const startFlushPolling = () => {
+    if (flushTimer === undefined && pendingListeners.size > 0) {
+      // Lightweight poll; boot-completion also triggers an immediate flush.
+      flushTimer = setInterval(flushPendingListeners, 20);
+    }
+  };
+
   return {
     get state() {
       return runtime.state;
@@ -292,7 +349,17 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
         return runtime.fs.rm(path, options);
       },
     },
-    boot: () => runtime.boot(),
+    boot: () => {
+      const booted = runtime.boot();
+
+      /*
+       * The guest lane may appear exactly at boot completion; flush any
+       * late-bound listeners immediately instead of waiting for the poll.
+       */
+      void booted.then(flushPendingListeners, () => undefined);
+
+      return booted;
+    },
     teardown: () => runtime.teardown(),
     runActionCommand: (command, signal) => runtime.runActionCommand(command, signal),
 
@@ -318,9 +385,34 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
       const lane = runtime.on;
 
       if (!lane) {
-        throw new NexariUnsupportedCapabilityError(
-          'runtime event handling (on): the guest exposes no preview event lane',
-        );
+        /*
+         * The lane is not exposed (yet). Unknown-event refusals above stay
+         * typed; a missing lane is late-bound: queue the listener and connect
+         * it automatically once the guest exposes the lane after boot.
+         */
+        const pending: PendingListener = {
+          event,
+          callback: callback as (...args: unknown[]) => void,
+          detached: false,
+        };
+
+        pendingListeners.add(pending);
+        startFlushPolling();
+
+        return () => {
+          if (pending.detach) {
+            pending.detach();
+            pending.detach = undefined;
+          }
+
+          pending.detached = true;
+          pendingListeners.delete(pending);
+
+          if (pendingListeners.size === 0 && flushTimer !== undefined) {
+            clearInterval(flushTimer);
+            flushTimer = undefined;
+          }
+        };
       }
 
       const detach = lane(event, callback as (...args: unknown[]) => void);

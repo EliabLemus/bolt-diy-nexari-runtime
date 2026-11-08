@@ -324,6 +324,80 @@ describe('createNexariBrowserRuntime', () => {
     // After detaching through the facade, no further emissions arrive.
     expect(received).toHaveLength(1);
   });
+
+  it('late-binds listeners registered before the guest exposes its lane', async () => {
+    const listeners = new Set<(...args: unknown[]) => void>();
+    const guest = createSyntheticGuest() as NexariGuestRuntime & { onGuestEvent?: NexariGuestEventLane };
+
+    // Guest starts without a lane; it appears only after boot resolves.
+    delete guest.onGuestEvent;
+
+    const runtime = createNexariRuntime({
+      boot: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            guest.onGuestEvent = (_event, listener) => {
+              listeners.add(listener);
+
+              return () => {
+                listeners.delete(listener);
+              };
+            };
+            resolve(guest);
+          }, 50);
+        }),
+    });
+
+    const facade = createNexariBrowserRuntime(runtime);
+
+    // Subscribe before boot completes: no lane exists yet.
+    const received: unknown[][] = [];
+    const unsubscribe = facade.on('server-ready', (...args: unknown[]) => received.push(args));
+
+    listeners.forEach((listener) => listener(3000, 'http://localhost:3000'));
+    expect(received).toHaveLength(0);
+
+    await facade.boot();
+
+    // Poll interval (20ms) flushes the queued listener once the lane exists.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    listeners.forEach((listener) => listener(3001, 'http://localhost:3001'));
+    expect(received).toEqual([[3001, 'http://localhost:3001']]);
+
+    unsubscribe();
+    listeners.forEach((listener) => listener(3002, 'http://localhost:3002'));
+    expect(received).toHaveLength(1);
+  });
+
+  it('drops queued late-bound listeners when detached before the lane appears', async () => {
+    const listeners = new Set<(...args: unknown[]) => void>();
+    const guest = createSyntheticGuest() as NexariGuestRuntime & { onGuestEvent?: NexariGuestEventLane };
+
+    guest.onGuestEvent = (_event, listener) => {
+      listeners.add(listener);
+
+      return () => {
+        listeners.delete(listener);
+      };
+    };
+
+    const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+    const facade = createNexariBrowserRuntime(runtime);
+
+    const received: unknown[][] = [];
+    const unsubscribe = facade.on('port', (...args: unknown[]) => received.push(args));
+    unsubscribe();
+
+    await facade.boot();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    listeners.forEach((listener) => listener(4100, 'open', 'http://localhost:4100'));
+
+    // The queued listener was detached before flush: zero deliveries.
+    expect(received).toHaveLength(0);
+    expect(listeners.size).toBe(0);
+  });
 });
 
 describe('createNexariBrowserRuntimeBackend', () => {
