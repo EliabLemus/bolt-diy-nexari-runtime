@@ -107,10 +107,11 @@ describe('createNexariActionShell', () => {
 });
 
 describe('rewriteWasmSafeCommand', () => {
-  it('maps bare install to the full install pipeline (install + wasm builds + rollup swap)', () => {
+  it('maps bare install to the full install pipeline (install + wasm builds + rollup swap + esbuild swap)', () => {
     expect(rewriteWasmSafeCommand('npm install')).toEqual([
       'npm install --ignore-scripts',
-      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
     ]);
   });
@@ -121,11 +122,12 @@ describe('rewriteWasmSafeCommand', () => {
     expect(rewriteWasmSafeCommand('  npm   install  ')).toEqual(rewriteWasmSafeCommand('npm install'));
   });
 
-  it('maps dev, build and preview to the full 4-step start pipeline (install + wasm builds + rollup swap + npm run X)', () => {
+  it('maps dev, build and preview to the full 5-step start pipeline (install + wasm builds + rollup swap + esbuild swap + npm run X)', () => {
     const pipeline = rewriteWasmSafeCommand('npm run dev');
     expect(pipeline).toEqual([
       'npm install --ignore-scripts',
-      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
       'npm run dev',
     ]);
@@ -135,7 +137,7 @@ describe('rewriteWasmSafeCommand', () => {
 
   it('preserves flags after `--` on the final run step', () => {
     const pipeline = rewriteWasmSafeCommand('npm run dev -- --host 0.0.0.0');
-    expect(pipeline?.slice(0, 3)).toEqual(rewriteWasmSafeCommand('npm run dev')!.slice(0, 3));
+    expect(pipeline?.slice(0, 4)).toEqual(rewriteWasmSafeCommand('npm run dev')!.slice(0, 4));
     expect(pipeline?.at(-1)).toBe('npm run dev -- --host 0.0.0.0');
   });
 
@@ -147,7 +149,8 @@ describe('rewriteWasmSafeCommand', () => {
     // esbuild/@rollup/wasm-node are already brought by the wasm rebuild step.
     expect(rewriteWasmSafeCommand('npm install esbuild @rollup/wasm-node')).toEqual([
       'npm install --ignore-scripts',
-      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
     ]);
   });
@@ -156,10 +159,11 @@ describe('rewriteWasmSafeCommand', () => {
     const pipeline = rewriteWasmSafeCommand('npm install vite@7.1.0');
     expect(pipeline).toEqual([
       'npm install --ignore-scripts --no-save vite@7.1.0',
-      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
     ]);
-    expect(rewriteWasmSafeCommand('npm install webpack')?.length).toBe(3);
+    expect(rewriteWasmSafeCommand('npm install webpack')?.length).toBe(4);
     expect(rewriteWasmSafeCommand('npm install lodash')?.length).toBe(1);
   });
 
@@ -227,7 +231,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const commands = runActionCommand.mock.calls.map(([command]) => command);
     expect(commands).not.toContain('npm install && npm run dev');
     expect(commands[0]).toBe('npm install --ignore-scripts');
-    expect(commands[1]).toBe('npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node');
+    expect(commands[1]).toBe('npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(commands.some((command) => command.includes('fs.cpSync'))).toBe(true);
 
     // The never-exiting dev server step goes through the detached spawn lane, not exit-joining runActionCommand.
@@ -274,10 +278,10 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const { output } = (await shell.executeCommand('session-1', 'pnpm install'))!;
 
     expect(output).toContain('npm install --ignore-scripts');
-    expect(output).toContain('esbuild@0.28.2 @rollup/wasm-node');
-    expect(output).toContain('$ npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node');
+    expect(output).toContain('esbuild-wasm@0.28.2 @rollup/wasm-node');
+    expect(output).toContain('$ npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).not.toContain('pnpm install\n');
-    expect(runActionCommand).toHaveBeenCalledTimes(3);
+    expect(runActionCommand).toHaveBeenCalledTimes(4);
   });
 
   it('stops at the first failing step and returns that step exit code', async () => {
@@ -292,6 +296,38 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     expect(result.output).toContain('step failed with exit code 37');
     expect(result.exitCode).toBe(37);
     expect(runActionCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures a crash after the ready line in the result (death output + real exit code)', async () => {
+    const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+
+    /*
+     * The live failure shape: vite prints its ready banner, then dies at the
+     * first transform (native esbuild binary on wasm32). The stream closes and
+     * the process exits non-zero moments after `Local:` — the result must carry
+     * the death diagnostics instead of the ready line.
+     */
+    (runtime as unknown as { spawn: unknown }).spawn = vi.fn().mockImplementation(async () => ({
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({
+        start(controller) {
+          controller.enqueue('VITE v7.1.0  ready in 300 ms\n');
+          controller.enqueue('Local: http://localhost:5173/\n');
+          controller.enqueue('Error: The package esbuild could not be found / could not be executed\n');
+          controller.close();
+        },
+      }),
+      exit: Promise.resolve(1),
+      kill: () => undefined,
+    }));
+
+    const shell = createNexariActionShell(runtime);
+    const result = (await shell.executeCommand('session-1', 'npm run dev'))!;
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('Local: http://localhost:5173/');
+    expect(result.output).toContain('could not be executed');
+    expect(runActionCommand).toHaveBeenCalledTimes(4);
   });
 
   it('propagates the caller abort signal to every pipeline step', async () => {
@@ -437,7 +473,8 @@ describe('regression: artifact shell action on a guest with a late event lane', 
     expect(exitCode).toBe(0);
     expect(executed).toEqual([
       'sh -c npm install --ignore-scripts',
-      'sh -c npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      'sh -c npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
       'sh -c npm run dev',
     ]);

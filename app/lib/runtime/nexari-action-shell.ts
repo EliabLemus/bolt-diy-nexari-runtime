@@ -10,16 +10,32 @@ import type { NexariBrowserRuntime } from './nexari-runtime-facade';
  * dev server (`VITE ready`) on the guest.
  */
 const WASM_SAFE_INSTALL_STEP = 'npm install --ignore-scripts';
-const WASM_SAFE_WASM_BUILDS_STEP = 'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node';
+const WASM_SAFE_WASM_BUILDS_STEP = 'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node';
 const WASM_SAFE_ROLLUP_SWAP_STEP =
   `node -e "const fs=require('fs'); ` +
   `fs.rmSync('node_modules/rollup',{recursive:true,force:true}); ` +
   `fs.cpSync('node_modules/@rollup/wasm-node','node_modules/rollup',{recursive:true})"`;
 
+/**
+ * esbuild must resolve to its WebAssembly build in the guest: the vendored
+ * vivari runtime documents `esbuild -> esbuild-wasm` as the verified
+ * substitute and patches esbuild-wasm's service to run in-thread. Installing
+ * the native `esbuild` package instead leaves a binary vite cannot execute on
+ * wasm32 — the dev server prints `Local:` and dies at the first transform,
+ * which surfaces downstream as a 502 "No server listening". Mirrors the
+ * rollup swap so `require('esbuild')` (vite's dependency) loads the wasm
+ * build the runtime knows how to patch.
+ */
+const WASM_SAFE_ESBUILD_SWAP_STEP =
+  `node -e "const fs=require('fs'); ` +
+  `fs.rmSync('node_modules/esbuild',{recursive:true,force:true}); ` +
+  `fs.cpSync('node_modules/esbuild-wasm','node_modules/esbuild',{recursive:true})"`;
+
 const WASM_SAFE_PIPELINE_STEPS: readonly string[] = [
   WASM_SAFE_INSTALL_STEP,
   WASM_SAFE_WASM_BUILDS_STEP,
   WASM_SAFE_ROLLUP_SWAP_STEP,
+  WASM_SAFE_ESBUILD_SWAP_STEP,
 ];
 
 const WASM_SAFE_PIPELINE_INSTALL: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
@@ -119,7 +135,7 @@ function mapWasmSafeSegment(segment: string): string[] | null {
   const deduped = packages.filter((pkg) => {
     const name = stripVersion(pkg);
 
-    return name !== 'esbuild' && name !== '@rollup/wasm-node';
+    return name !== 'esbuild' && name !== 'esbuild-wasm' && name !== '@rollup/wasm-node';
   });
   const needsWasm = packages.some((pkg) => NATIVE_BINARY_PACKAGES.has(stripVersion(pkg)));
 
@@ -127,7 +143,7 @@ function mapWasmSafeSegment(segment: string): string[] | null {
     deduped.length > 0 ? `npm install --ignore-scripts --no-save ${deduped.join(' ')}` : WASM_SAFE_INSTALL_STEP;
 
   if (needsWasm) {
-    return [installStep, WASM_SAFE_WASM_BUILDS_STEP, WASM_SAFE_ROLLUP_SWAP_STEP];
+    return [installStep, WASM_SAFE_WASM_BUILDS_STEP, WASM_SAFE_ROLLUP_SWAP_STEP, WASM_SAFE_ESBUILD_SWAP_STEP];
   }
 
   return [installStep];
@@ -146,6 +162,16 @@ const SERVER_OUTPUT_READY_PATTERN =
   /(local:|ready in|listening|server running|started server|https?:\/\/[^\s]+\.\S+:\d+)/i;
 const SERVER_STEP_TIMEOUT_MS = 30_000;
 
+/**
+ * A server that prints a ready line and dies moments later (wasm guest: the
+ * native esbuild binary failing at the first transform) must not be reported
+ * as a healthy start. After the ready pattern matches, keep reading for this
+ * window: if the process exits inside it, the step resolves with the real
+ * exit code and the crash output instead of the ready line. The window is
+ * bounded so `executeCommand` never hangs on a healthy long-running server.
+ */
+const SERVER_READY_STABILIZATION_MS = 1_500;
+
 interface ServerStepResult {
   output: string;
   exitCode: number;
@@ -157,6 +183,7 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
     let detachReady: (() => void) | undefined;
     let detachPort: (() => void) | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stabilization: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
       detachReady?.();
@@ -165,6 +192,11 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
       if (timeout !== undefined) {
         clearTimeout(timeout);
         timeout = undefined;
+      }
+
+      if (stabilization !== undefined) {
+        clearTimeout(stabilization);
+        stabilization = undefined;
       }
     };
 
@@ -224,12 +256,21 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
         const process = await runtime.spawn('sh', ['-c', step], { signal });
         const reader = process.output.getReader();
         let output = '';
+        let readerDone = false;
+        let exitedCode: number | undefined;
 
         void process.exit.then(
           (exitCode) => {
-            // A server that exits on its own resolves with its real exit code.
-            settle({ output, exitCode });
-            void reader.cancel().catch(() => undefined);
+            /*
+             * A server that exits on its own resolves with its real exit code —
+             * but only once the reader loop has finished draining, so a fast
+             * crash never wins the race and masks its own diagnostics.
+             */
+            exitedCode = exitCode;
+
+            if (readerDone) {
+              settle({ output, exitCode });
+            }
           },
           () => undefined,
         );
@@ -243,16 +284,40 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
 
           output += value;
 
-          if (SERVER_OUTPUT_READY_PATTERN.test(output)) {
-            settle({ output, exitCode: 0 });
-            void reader.cancel().catch(() => undefined);
+          if (SERVER_OUTPUT_READY_PATTERN.test(output) && stabilization === undefined) {
+            /*
+             * Ready line seen: do not settle immediately. Keep draining for
+             * a short stabilization window so a crash right after the bind
+             * (the process exits with its real code and diagnostics) is
+             * captured in the result instead of masked by the ready line.
+             */
+            stabilization = setTimeout(
+              () => settle({ output, exitCode: exitedCode ?? 0 }),
+              SERVER_READY_STABILIZATION_MS,
+            );
 
-            return;
+            continue;
           }
         }
+
+        readerDone = true;
+
+        if (stabilization !== undefined) {
+          clearTimeout(stabilization);
+
+          stabilization = undefined;
+        }
+
+        settle({ output, exitCode: exitedCode ?? (await process.exit) });
       } catch (error) {
         fail(error);
       } finally {
+        if (stabilization !== undefined) {
+          clearTimeout(stabilization);
+
+          stabilization = undefined;
+        }
+
         signal?.removeEventListener('abort', onAbort);
       }
     })();
