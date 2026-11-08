@@ -69,12 +69,12 @@ describe('createFilesStoreRuntime (stackblitz control path)', () => {
 });
 
 describe('createFilesStoreRuntime (nexari path)', () => {
-  it('exposes the app workdir and omits internal (typed absence of watching)', async () => {
+  it('exposes the app workdir and an internal.watchPaths poller', async () => {
     const { facade } = createFacadeFake();
     const surface = await createFilesStoreRuntime('nexari', Promise.resolve(facade));
 
     expect(surface.workdir).toBe(WORK_DIR);
-    expect(surface.internal).toBeUndefined();
+    expect(typeof surface.internal?.watchPaths).toBe('function');
   });
 
   it('translates bare workdir-relative write paths to the guest domain', async () => {
