@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NexariRuntimeTerminatedError, createNexariRuntime, type NexariGuestRuntime } from './nexari-runtime';
+import {
+  NexariRuntimeTerminatedError,
+  createNexariRuntime,
+  type NexariGuestEventLane,
+  type NexariGuestRuntime,
+} from './nexari-runtime';
 import {
   NexariUnsupportedCapabilityError,
   createNexariBrowserRuntime,
@@ -290,6 +295,34 @@ describe('createNexariBrowserRuntime', () => {
       expect(guest.fs.mkdir).toHaveBeenCalledTimes(2);
       expect(guest.fs.rm).toHaveBeenCalledTimes(2);
     });
+  });
+  it('unsubscribes the guest lane when the facade detach runs', async () => {
+    const listeners = new Set<(...args: unknown[]) => void>();
+    const guest = createSyntheticGuest() as NexariGuestRuntime & { onGuestEvent?: NexariGuestEventLane };
+
+    guest.onGuestEvent = (_event, listener) => {
+      listeners.add(listener);
+
+      return () => {
+        listeners.delete(listener);
+      };
+    };
+
+    const runtime = createNexariRuntime({ boot: () => Promise.resolve(guest) });
+    const facade = createNexariBrowserRuntime(runtime);
+    await facade.boot();
+
+    const received: unknown[][] = [];
+    const unsubscribe = facade.on('server-ready', (...args: unknown[]) => received.push(args));
+
+    listeners.forEach((listener) => listener(3000, 'http://localhost:3000'));
+    expect(received).toHaveLength(1);
+
+    unsubscribe();
+    listeners.forEach((listener) => listener(3000, 'http://localhost:3000'));
+
+    // After detaching through the facade, no further emissions arrive.
+    expect(received).toHaveLength(1);
   });
 });
 

@@ -326,7 +326,9 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
       const detach = lane(event, callback as (...args: unknown[]) => void);
 
       return () => {
-        void detach;
+        if (typeof detach === 'function') {
+          detach();
+        }
       };
     },
     setPreviewScript: () => Promise.reject(new NexariUnsupportedCapabilityError('setPreviewScript')),

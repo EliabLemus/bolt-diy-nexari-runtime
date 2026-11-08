@@ -180,6 +180,21 @@ export class PreviewsStore {
     // Listen for server ready events
     runtime.on('server-ready', (port, url) => {
       console.log('[Preview] Server ready on port:', port, url);
+
+      // A preview only becomes ready when the server-ready event fires.
+      const previews = this.previews.get();
+      let previewInfo = this.#availablePreviews.get(port);
+
+      if (!previewInfo) {
+        previewInfo = { port, ready: true, baseUrl: url };
+        this.#availablePreviews.set(port, previewInfo);
+        previews.push(previewInfo);
+      }
+
+      previewInfo.ready = true;
+      previewInfo.baseUrl = url;
+      this.previews.set([...previews]);
+
       this.broadcastUpdate(url);
 
       // Initial storage sync when preview is ready
@@ -199,13 +214,16 @@ export class PreviewsStore {
 
       const previews = this.previews.get();
 
+      /*
+       * Registering the port does NOT mark the preview ready;
+       * only the `server-ready` event flips ready to true.
+       */
       if (!previewInfo) {
-        previewInfo = { port, ready: type === 'open', baseUrl: url };
+        previewInfo = { port, ready: false, baseUrl: url };
         this.#availablePreviews.set(port, previewInfo);
         previews.push(previewInfo);
       }
 
-      previewInfo.ready = type === 'open';
       previewInfo.baseUrl = url;
 
       this.previews.set([...previews]);
@@ -218,8 +236,17 @@ export class PreviewsStore {
 
   // Helper to extract preview ID from URL
   getPreviewId(url: string): string | null {
-    const match = url.match(/^https?:\/\/([^.]+)\.local-credentialless\.webcontainer-api\.io/);
-    return match ? match[1] : null;
+    // WebContainer preview URLs: https://<id>.local-credentialless.webcontainer-api.io
+    const wcMatch = url.match(/^https?:\/\/([^.]+)\.local-credentialless\.webcontainer-api\.io/);
+
+    if (wcMatch) {
+      return wcMatch[1];
+    }
+
+    // Nexari preview URLs (vivari SDK): https://<host>/preview/<port>/...
+    const nexariMatch = url.match(/^https?:\/\/[^/]+\/preview\/(\d+)/);
+
+    return nexariMatch ? `nexari-${nexariMatch[1]}` : null;
   }
 
   // Broadcast state change to all tabs
