@@ -93,6 +93,10 @@ export interface NexariBrowserRuntime {
   boot(): Promise<void>;
   spawn(command: string, args?: string[], options?: NexariSpawnOptions): Promise<NexariBrowserProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
+  on(event: 'server-ready', callback: (port: number, url: string) => void): () => void;
+  on(event: 'port', callback: (port: number, kind: 'open' | 'close', url: string) => void): () => void;
+
+  /** Refusal arm: any other event stays a typed, visible failure. */
   on(event: string, callback: (...args: unknown[]) => void): void;
   setPreviewScript(script: string): Promise<void>;
   readonly internal: NexariBrowserRuntimeInternal;
@@ -306,7 +310,25 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
       };
     },
 
-    on: unsupportedCapability('runtime event handling (on)'),
+    on(event, callback) {
+      if (event !== 'server-ready' && event !== 'port') {
+        throw new NexariUnsupportedCapabilityError(`runtime event ${String(event)}`);
+      }
+
+      const lane = runtime.on;
+
+      if (!lane) {
+        throw new NexariUnsupportedCapabilityError(
+          'runtime event handling (on): the guest exposes no preview event lane',
+        );
+      }
+
+      const detach = lane(event, callback as (...args: unknown[]) => void);
+
+      return () => {
+        void detach;
+      };
+    },
     setPreviewScript: () => Promise.reject(new NexariUnsupportedCapabilityError('setPreviewScript')),
     internal: {
       watchPaths: unsupportedCapability('internal.watchPaths (filesystem watching)'),

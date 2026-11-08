@@ -23,6 +23,16 @@ export interface VivariGuestRuntimeLike {
   };
   spawn(command: string, args?: string[], options?: { signal?: AbortSignal }): Promise<VivariGuestProcessLike>;
   teardown(): void | Promise<void>;
+
+  /**
+   * Optional preview event lane exposed by the pinned Vivari adapter
+   * (`server-ready` after a real in-VM HTTP response; `port` open/close).
+   */
+  on?(event: 'server-ready', listener: (port: number, url: string) => void): (() => void) | PromiseLike<void>;
+  on?(
+    event: 'port',
+    listener: (port: number, kind: 'open' | 'close', url: string) => void,
+  ): (() => void) | PromiseLike<void>;
 }
 
 export interface VivariGuestProcessLike {
@@ -93,6 +103,14 @@ function adaptVivariGuest(guest: VivariGuestRuntimeLike): NexariGuestRuntime {
     spawn: (command, args, options) =>
       guest.spawn(command, args, options ? { signal: options.signal } : undefined).then(adaptVivariProcess),
     teardown: () => Promise.resolve(guest.teardown()),
+    ...(guest.on
+      ? {
+          onGuestEvent: (event, listener) =>
+            event === 'server-ready'
+              ? guest.on!('server-ready', listener as (port: number, url: string) => void)
+              : guest.on!('port', listener as (port: number, kind: 'open' | 'close', url: string) => void),
+        }
+      : {}),
   };
 }
 

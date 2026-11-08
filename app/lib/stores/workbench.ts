@@ -4,6 +4,7 @@ import { ActionRunner } from '~/lib/runtime/action-runner';
 import { createActionShell } from '~/lib/runtime/action-shell-selector';
 import type { ActionCallbackData, ArtifactCallbackData } from '~/lib/runtime/message-parser';
 import { runtimeBackend, webcontainer } from '~/lib/webcontainer';
+import { createPreviewsRuntime } from '~/lib/runtime/previews-runtime-selector';
 import { createActionRunnerRuntime } from '~/lib/runtime/action-runner-runtime-selector';
 import { createFilesStoreRuntime } from '~/lib/runtime/files-store-runtime-selector';
 import type { ITerminal } from '~/types/terminal';
@@ -39,7 +40,7 @@ type Artifacts = MapStore<Record<string, ArtifactState>>;
 export type WorkbenchViewType = 'code' | 'diff' | 'preview';
 
 export class WorkbenchStore {
-  #previewsStore = new PreviewsStore(webcontainer);
+  #previewsStore = new PreviewsStore(createPreviewsRuntime(runtimeBackend, webcontainer));
   #filesStore = new FilesStore(createFilesStoreRuntime(runtimeBackend, webcontainer));
   #editorStore = new EditorStore(this.#filesStore);
   #terminalStore = new TerminalStore(runtimeBackend, webcontainer);

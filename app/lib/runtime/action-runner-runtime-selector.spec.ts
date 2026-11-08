@@ -62,7 +62,7 @@ function createFacadeFake(options?: { readdirHits?: string[] }) {
       };
     }),
     runActionCommand: vi.fn(async (command: string) => ({ stdout: `ran ${command}`, stderr: '', exitCode: 0 })),
-    on: () => undefined,
+    on: (() => () => undefined) as unknown as NexariBrowserRuntime['on'],
     setPreviewScript: () => Promise.resolve(),
     internal: {
       watchPaths: () => {

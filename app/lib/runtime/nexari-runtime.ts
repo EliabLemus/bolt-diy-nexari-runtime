@@ -32,6 +32,22 @@ export interface NexariGuestRuntime {
   fs: NexariGuestFileSystem;
   spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess>;
   teardown(): Promise<void>;
+
+  /**
+   * Optional preview event lane exposed by the underlying runtime (Vivari's
+   * `on('server-ready' | 'port')`). Absent guests keep every other capability;
+   * consumers of the lane fail typed instead of silently no-oping.
+   */
+  onGuestEvent?: NexariGuestEventLane;
+}
+
+/**
+ * Preview event lane mirrored from the vendored Vivari adapter: `server-ready`
+ * fires only after the in-VM server answers a real HTTP request (a port bind
+ * does not count, per Vivari's design) and `port` reports open/close transitions.
+ */
+export interface NexariGuestEventLane {
+  (event: 'server-ready' | 'port', listener: (...args: unknown[]) => void): (() => void) | PromiseLike<void>;
 }
 
 export interface NexariRuntimeOptions {
@@ -50,6 +66,9 @@ export interface NexariRuntime {
   boot(): Promise<void>;
   spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
+
+  /** Present only when the booted guest exposes a preview event lane. */
+  readonly on?: NexariGuestEventLane;
   teardown(): Promise<void>;
 }
 
@@ -80,6 +99,11 @@ class NexariRuntimeAdapter implements NexariRuntime {
 
   get state(): NexariRuntimeState {
     return this.#state;
+  }
+
+  /** Preview event lane of the booted guest; undefined until boot completes. */
+  get on(): NexariGuestEventLane | undefined {
+    return this.#guest?.onGuestEvent;
   }
 
   async boot(): Promise<void> {
