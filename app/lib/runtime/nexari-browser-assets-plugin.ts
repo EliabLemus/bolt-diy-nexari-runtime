@@ -16,6 +16,18 @@ const PACKAGE_SUBPATH = 'node_modules/@nexari/vivari-browser-assets';
 
 const ALLOWED_ENTRY_PREFIXES = ['/', '/assets/', '/vendor/'];
 
+/** URL paths the dev middleware claims for the Nexari package. */
+const NEXARI_OWNED_PATHS = ['/sw.js', '/assets/', '/vendor/', '/__vv-bridge.html', '/__vv-preview-boot.html'];
+
+/**
+ * True when a URL path is one the dev middleware claims for the Nexari
+ * package. Everything else — the app root, app routes — belongs to the host
+ * app and must fall through to Vite, never 403.
+ */
+export function isNexariOwnedAssetPath(urlPath: string): boolean {
+  return NEXARI_OWNED_PATHS.some((owned) => urlPath === owned || urlPath.startsWith(owned));
+}
+
 const MIME_TYPES: Record<string, string> = {
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',
@@ -80,7 +92,8 @@ function serveNexariAsset(
 ): void {
   const urlPath = (req.url ?? '').split('?')[0];
 
-  if (!ALLOWED_ENTRY_PREFIXES.some((prefix) => urlPath === prefix || urlPath.startsWith(prefix))) {
+  // The app root and non-asset paths belong to the host app: fall through.
+  if (!isNexariOwnedAssetPath(urlPath)) {
     next();
 
     return;

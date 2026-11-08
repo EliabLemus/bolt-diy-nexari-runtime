@@ -2,10 +2,24 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readNexariAssetBytes, resolveNexariAssetUrl } from './nexari-browser-assets-plugin';
+import { isNexariOwnedAssetPath, readNexariAssetBytes, resolveNexariAssetUrl } from './nexari-browser-assets-plugin';
 
 const repositoryRoot = resolve(import.meta.dirname, '../../..');
 const distRoot = resolve(repositoryRoot, 'node_modules/@nexari/vivari-browser-assets/dist');
+
+describe('nexari-browser-assets middleware ownership', () => {
+  it('never claims the app root — the host HTML document falls through to Vite', () => {
+    expect(isNexariOwnedAssetPath('/')).toBe(false);
+    expect(isNexariOwnedAssetPath('/?foo=bar'.split('?')[0])).toBe(false);
+  });
+
+  it('claims the package asset paths only', () => {
+    expect(isNexariOwnedAssetPath('/sw.js')).toBe(true);
+    expect(isNexariOwnedAssetPath('/assets/x.js')).toBe(true);
+    expect(isNexariOwnedAssetPath('/vendor/pyodide/x.bin')).toBe(true);
+    expect(isNexariOwnedAssetPath('/chat')).toBe(false);
+  });
+});
 
 describe('nexari-browser-assets path safety', () => {
   it('rejects traversal attempts that escape the package dist root', () => {
