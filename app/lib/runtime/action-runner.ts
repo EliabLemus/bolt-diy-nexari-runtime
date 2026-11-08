@@ -322,7 +322,18 @@ export class ActionRunner {
     }
 
     const runtime = await this.#runtime;
-    const relativePath = nodePath.relative(runtime.workdir, action.filePath);
+
+    /*
+     * Artifact actions may carry workdir-relative paths (upstream emits
+     * e.g. `src/App.tsx`). Resolve them against the runtime workdir first:
+     * `path.relative` against a bare relative path silently joins the
+     * process cwd, producing `../..` chains the nexari guest correctly
+     * refuses (and the stackblitz container only resolves by accident).
+     */
+    const actionPath = nodePath.isAbsolute(action.filePath)
+      ? action.filePath
+      : nodePath.join(runtime.workdir, action.filePath);
+    const relativePath = nodePath.relative(runtime.workdir, actionPath);
 
     let folder = nodePath.dirname(relativePath);
 

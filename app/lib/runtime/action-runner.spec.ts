@@ -292,6 +292,32 @@ describe('ActionRunner consumes only the narrow runtime surface', () => {
     expect(runner.actions.get().f1.status).toBe('complete');
   });
 
+  it('resolves workdir-relative artifact file paths against the runtime workdir', async () => {
+    const { surface, fs } = createSurfaceFake();
+    const runner = createSurfaceRunner(surface);
+
+    runner.addAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'f2',
+      action: { type: 'file', filePath: 'src/App.tsx', content: 'export {};' },
+    });
+    await runner.runAction({
+      artifactId: 'artifact-1',
+      messageId: 'message-1',
+      actionId: 'f2',
+      action: { type: 'file', filePath: 'src/App.tsx', content: 'export {};' },
+    });
+
+    /*
+     * A bare relative path must NOT be joined with the process cwd (which
+     * yields `../..` chains the guest correctly refuses).
+     */
+    expect(fs.mkdir).toHaveBeenCalledWith('src', { recursive: true });
+    expect(fs.writeFile).toHaveBeenCalledWith('src/App.tsx', 'export {};');
+    expect(runner.actions.get().f2.status).toBe('complete');
+  });
+
   it('reads file history as utf-8 text through the narrow surface', async () => {
     const { surface } = createSurfaceFake();
     const runner = createSurfaceRunner(surface);
