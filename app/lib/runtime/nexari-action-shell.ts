@@ -16,16 +16,24 @@ const WASM_SAFE_ROLLUP_SWAP_STEP =
   `fs.rmSync('node_modules/rollup',{recursive:true,force:true}); ` +
   `fs.cpSync('node_modules/@rollup/wasm-node','node_modules/rollup',{recursive:true})"`;
 
-const WASM_SAFE_PIPELINE_INSTALL: readonly string[] = [
+const WASM_SAFE_PIPELINE_STEPS: readonly string[] = [
   WASM_SAFE_INSTALL_STEP,
   WASM_SAFE_WASM_BUILDS_STEP,
   WASM_SAFE_ROLLUP_SWAP_STEP,
 ];
 
-const WASM_SAFE_PIPELINE_START: readonly string[] = [WASM_SAFE_INSTALL_STEP, WASM_SAFE_ROLLUP_SWAP_STEP];
+const WASM_SAFE_PIPELINE_INSTALL: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
+const WASM_SAFE_PIPELINE_START: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
+
+/** Bundlers whose native postinstalls fail on wasm32 and need the wasm rebuild. */
+const NATIVE_BINARY_PACKAGES = new Set(['vite', 'rollup', 'esbuild', 'webpack', 'parcel', 'turbopack']);
 
 function normalize(command: string): string {
   return command.trim().replace(/\s+/g, ' ');
+}
+
+function stripVersion(pkg: string): string {
+  return pkg.replace(/@[0-9^~][^@]*$/, '').replace(/@latest$/, '');
 }
 
 /**
@@ -36,7 +44,7 @@ function normalize(command: string): string {
  *
  * Pure string-mapping only: flags and package-manager variants (`pnpm`,
  * `yarn`, `--legacy-peer-deps`, compound `install && run dev`) normalize to
- * the exact same tested pipeline; nothing dynamic is generated.
+ * the exact same tested pipeline.
  */
 export function rewriteWasmSafeCommand(command: string): string[] | null {
   const normalized = normalize(command);
@@ -46,40 +54,83 @@ export function rewriteWasmSafeCommand(command: string): string[] | null {
   }
 
   /*
-   * Split compound commands so `npm install && npm run dev` maps to the
-   * start pipeline (install + swap + dev) rather than bare install.
+   * Split compound commands and rewrite each part by its own type, so
+   * `npm install && npm run dev` maps to install + dev and
+   * `npm run build && npm run preview` runs both targets.
    */
   const segments = normalized.split(' && ').map((part) => part.trim());
 
-  let startTarget: string | null = null;
-  let sawInstall = false;
+  const steps: string[] = [];
 
   for (const segment of segments) {
-    // The guest ships npm only; pnpm/yarn rewrite to the npm pipeline.
-    const rewritten = segment.replace(/^(pnpm|yarn)(\s+)/, 'npm$2');
+    const mapped = mapWasmSafeSegment(segment);
 
-    if (/^npm run (dev|build|preview)$/.test(rewritten)) {
-      startTarget = rewritten.replace(/^npm run /, '');
-      continue;
+    if (mapped === null) {
+      return null;
     }
 
-    if (/^npm (install|i|ci)( .*)?$/.test(rewritten)) {
-      sawInstall = true;
-      continue;
+    /*
+     * The run pipeline starts with the install pipeline; when a bare install
+     * was already emitted by an earlier segment, only append the run step.
+     */
+    if (mapped[0] === WASM_SAFE_INSTALL_STEP && steps[0] === WASM_SAFE_INSTALL_STEP) {
+      steps.push(...mapped.slice(WASM_SAFE_PIPELINE_STEPS.length));
+    } else {
+      steps.push(...mapped);
     }
+  }
 
+  return steps;
+}
+
+/**
+ * Maps a single command segment to its wasm-safe steps, or `null` when the
+ * segment is not a recognized project install/run command.
+ */
+function mapWasmSafeSegment(segment: string): string[] | null {
+  // The guest ships npm only; pnpm/yarn rewrite to the npm pipeline.
+  const rewritten = segment.replace(/^(pnpm|yarn)(\s+)/, 'npm$2');
+
+  const runMatch = /^npm run (dev|build|preview)( -- .+)?$/.exec(rewritten);
+
+  if (runMatch !== null) {
+    // The full 4-step start sequence, with the model's flags preserved on the final step.
+    return [...WASM_SAFE_PIPELINE_START, `npm run ${runMatch[1]}${runMatch[2] ?? ''}`];
+  }
+
+  const tokens = rewritten.split(' ');
+
+  if (tokens[0] !== 'npm' || !(tokens[1] === 'install' || tokens[1] === 'i' || tokens[1] === 'ci')) {
     return null;
   }
 
-  if (startTarget !== null) {
-    return [...WASM_SAFE_PIPELINE_START, `npm run ${startTarget}`];
-  }
+  const rest = tokens.slice(2);
+  const packages = rest.filter((token) => !token.startsWith('-'));
 
-  if (sawInstall) {
+  if (packages.length === 0) {
     return [...WASM_SAFE_PIPELINE_INSTALL];
   }
 
-  return null;
+  /*
+   * Package install: keep the requested packages (the wasm rebuild already
+   * brings esbuild/@rollup/wasm-node, so drop those duplicates), and add the
+   * wasm builds + rollup swap when a native-binary bundler is among them.
+   */
+  const deduped = packages.filter((pkg) => {
+    const name = stripVersion(pkg);
+
+    return name !== 'esbuild' && name !== '@rollup/wasm-node';
+  });
+  const needsWasm = packages.some((pkg) => NATIVE_BINARY_PACKAGES.has(stripVersion(pkg)));
+
+  const installStep =
+    deduped.length > 0 ? `npm install --ignore-scripts --no-save ${deduped.join(' ')}` : WASM_SAFE_INSTALL_STEP;
+
+  if (needsWasm) {
+    return [installStep, WASM_SAFE_WASM_BUILDS_STEP, WASM_SAFE_ROLLUP_SWAP_STEP];
+  }
+
+  return [installStep];
 }
 
 /**

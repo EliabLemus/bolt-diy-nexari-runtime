@@ -121,15 +121,55 @@ describe('rewriteWasmSafeCommand', () => {
     expect(rewriteWasmSafeCommand('  npm   install  ')).toEqual(rewriteWasmSafeCommand('npm install'));
   });
 
-  it('maps dev, build and preview to the start pipeline (install + rollup swap + npm run X)', () => {
+  it('maps dev, build and preview to the full 4-step start pipeline (install + wasm builds + rollup swap + npm run X)', () => {
     const pipeline = rewriteWasmSafeCommand('npm run dev');
-    expect(pipeline).toEqual(['npm install --ignore-scripts', expect.stringContaining('fs.cpSync'), 'npm run dev']);
+    expect(pipeline).toEqual([
+      'npm install --ignore-scripts',
+      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
+      'npm run dev',
+    ]);
     expect(rewriteWasmSafeCommand('npm run build')?.at(-1)).toBe('npm run build');
     expect(rewriteWasmSafeCommand('npm run preview')?.at(-1)).toBe('npm run preview');
   });
 
+  it('preserves flags after `--` on the final run step', () => {
+    const pipeline = rewriteWasmSafeCommand('npm run dev -- --host 0.0.0.0');
+    expect(pipeline?.slice(0, 3)).toEqual(rewriteWasmSafeCommand('npm run dev')!.slice(0, 3));
+    expect(pipeline?.at(-1)).toBe('npm run dev -- --host 0.0.0.0');
+  });
+
+  it('keeps requested packages on package installs, without extra esbuild/rollup', () => {
+    expect(rewriteWasmSafeCommand('npm install lodash axios')).toEqual([
+      'npm install --ignore-scripts --no-save lodash axios',
+    ]);
+
+    // esbuild/@rollup/wasm-node are already brought by the wasm rebuild step.
+    expect(rewriteWasmSafeCommand('npm install esbuild @rollup/wasm-node')).toEqual([
+      'npm install --ignore-scripts',
+      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
+    ]);
+  });
+
+  it('adds the wasm builds + rollup swap when a native-binary bundler is installed', () => {
+    const pipeline = rewriteWasmSafeCommand('npm install vite@7.1.0');
+    expect(pipeline).toEqual([
+      'npm install --ignore-scripts --no-save vite@7.1.0',
+      'npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
+    ]);
+    expect(rewriteWasmSafeCommand('npm install webpack')?.length).toBe(3);
+    expect(rewriteWasmSafeCommand('npm install lodash')?.length).toBe(1);
+  });
+
   it('maps the compound model command to the dev pipeline', () => {
     expect(rewriteWasmSafeCommand('npm install && npm run dev')).toEqual(rewriteWasmSafeCommand('npm run dev'));
+  });
+
+  it('rewrites every part of a compound command by its own type', () => {
+    const pipeline = rewriteWasmSafeCommand('npm run build && npm run preview');
+    expect(pipeline).toEqual([...rewriteWasmSafeCommand('npm run build')!, 'npm run preview']);
   });
 
   it('rewrites pnpm/yarn to the npm pipeline (the guest has no pnpm/yarn)', () => {
@@ -142,6 +182,7 @@ describe('rewriteWasmSafeCommand', () => {
     expect(rewriteWasmSafeCommand('cat package.json')).toBeNull();
     expect(rewriteWasmSafeCommand('')).toBeNull();
     expect(rewriteWasmSafeCommand('npm test')).toBeNull();
+    expect(rewriteWasmSafeCommand('yarn dev')).toBeNull();
   });
 });
 
@@ -182,6 +223,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const result = (await shell.executeCommand('session-1', 'npm run dev'))!;
     expect(result.output).toContain('boom');
     expect(result.output).toContain('step failed with exit code 37');
+    expect(result.exitCode).toBe(37);
     expect(runActionCommand).toHaveBeenCalledTimes(2);
   });
 
