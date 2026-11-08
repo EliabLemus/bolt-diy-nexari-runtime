@@ -118,6 +118,9 @@ importers:
       '@nexari/vivari-adapter':
         specifier: file:vendor/nexari-browser-stack/nexari-vivari-adapter-0.1.0-dev.tgz
         version: file:vendor/nexari-browser-stack/nexari-vivari-adapter-0.1.0-dev.tgz
+      '@nexari/vivari-browser-assets':
+        specifier: file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz
+        version: file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz
       '@octokit/rest':
         specifier: ^21.0.2
         version: 21.1.1
@@ -2212,6 +2215,10 @@ packages:
 
   '@nexari/vivari-adapter@file:vendor/nexari-browser-stack/nexari-vivari-adapter-0.1.0-dev.tgz':
     resolution: {integrity: sha512-IkiufAKHjjSF+qo7hKPo1zXuLfXam3BoQ0gOc0A7b9iBExh8ss1d2nih77XOLEK9NKc9V0H8LAlGT8sLKK1/Iw==, tarball: file:vendor/nexari-browser-stack/nexari-vivari-adapter-0.1.0-dev.tgz}
+    version: 0.1.0-dev
+
+  '@nexari/vivari-browser-assets@file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz':
+    resolution: {integrity: sha512-6tv1nxB++mqUdrnQxzZl3NqNoXWmf0Ma8OZx8tyVrytj7qMvKbDTwpazb7iQqMNTsBKma7DInufsU3WYJfFU7A==, tarball: file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz}
     version: 0.1.0-dev
 
   '@nodelib/fs.scandir@2.1.5':
@@ -10222,6 +10229,8 @@ snapshots:
     dependencies:
       '@nexari/runtime-contract': file:vendor/nexari-browser-stack/nexari-runtime-contract-0.1.0-dev.tgz
       '@vivari/core': file:vendor/nexari-browser-stack/vivari-core-1.0.0.tgz
+
+  '@nexari/vivari-browser-assets@file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
