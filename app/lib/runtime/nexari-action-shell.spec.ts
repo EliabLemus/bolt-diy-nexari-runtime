@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NexariRuntimeTerminatedError } from './nexari-runtime';
+import { createNexariRuntime, NexariRuntimeTerminatedError } from './nexari-runtime';
 import { createNexariActionShell, rewriteWasmSafeCommand } from './nexari-action-shell';
-import type { NexariBrowserRuntime } from './nexari-runtime-facade';
+import { createNexariBrowserRuntime, type NexariBrowserRuntime } from './nexari-runtime-facade';
 
 function createRuntime(result: { stdout: string; stderr: string; exitCode: number }) {
   const runActionCommand = vi.fn().mockResolvedValue(result);
@@ -190,16 +190,83 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
   it('never sends a project command raw: the rewritten pipeline runs step by step', async () => {
     const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 
+    /*
+     * The final dev step runs detached: the spawn lane hosts the never-exiting
+     * server, and readiness resolves through the (mocked) server-ready lane.
+     */
+    const spawn = vi.fn().mockImplementation(async () => {
+      const listeners: Array<() => void> = [];
+      const output = new ReadableStream<string>({
+        start(controller) {
+          controller.enqueue('VITE ready in 300 ms\n');
+          controller.close();
+        },
+      });
+
+      return {
+        input: new WritableStream<string>(),
+        output,
+        exit: new Promise<number>(() => undefined), // a serving dev server never exits
+        kill: () => listeners.splice(0).forEach((listener) => listener()),
+      };
+    });
+    (runtime as unknown as { spawn: unknown }).spawn = spawn;
+
+    // The facade fires 'server-ready' once the guest lane reports the server.
+    (runtime.on as ReturnType<typeof vi.fn>).mockImplementation((event: string, callback: () => void) => {
+      if (event === 'server-ready') {
+        setTimeout(callback, 0);
+      }
+
+      return () => undefined;
+    });
+
     const shell = createNexariActionShell(runtime);
-    await shell.executeCommand('session-1', 'npm install && npm run dev');
+    const { exitCode } = (await shell.executeCommand('session-1', 'npm install && npm run dev'))!;
 
     const commands = runActionCommand.mock.calls.map(([command]) => command);
     expect(commands).not.toContain('npm install && npm run dev');
-    expect(commands.at(-1)).toBe('npm run dev');
     expect(commands[0]).toBe('npm install --ignore-scripts');
+    expect(commands[1]).toBe('npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node');
     expect(commands.some((command) => command.includes('fs.cpSync'))).toBe(true);
+
+    // The never-exiting dev server step goes through the detached spawn lane, not exit-joining runActionCommand.
+    expect(commands).not.toContain('npm run dev');
+    expect(spawn).toHaveBeenCalledWith('sh', ['-c', 'npm run dev'], expect.objectContaining({ signal: undefined }));
+    expect(exitCode).toBe(0);
   });
 
+  it('resolves a slow-starting server step on server-ready without waiting for process exit', async () => {
+    const { runtime } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+
+    let serverReady: (() => void) | undefined;
+    (runtime.on as ReturnType<typeof vi.fn>).mockImplementation((event: string, callback: () => void) => {
+      if (event === 'server-ready') {
+        serverReady = callback;
+      }
+
+      return () => undefined;
+    });
+
+    (runtime as unknown as { spawn: unknown }).spawn = vi.fn().mockImplementation(async () => ({
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start: (controller) => controller.close() }),
+      exit: new Promise<number>(() => undefined),
+      kill: () => undefined,
+    }));
+
+    const shell = createNexariActionShell(runtime);
+    const pending = shell.executeCommand('session-1', 'npm run dev');
+
+    // The action stays pending (never exits) until the guest reports readiness.
+    let raced = false;
+    void pending.then(() => (raced = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(raced).toBe(false);
+
+    serverReady!();
+    await expect(pending).resolves.toEqual(expect.objectContaining({ exitCode: 0 }));
+  });
   it('shows the executed pipeline in the terminal output, not the original command', async () => {
     const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 
@@ -231,12 +298,37 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
     const controller = new AbortController();
 
+    /*
+     * The dev step runs detached on the spawn lane; give the mock a spawn whose
+     * process never exits so runServerStep relies on the signal listener.
+     */
+    (runtime as unknown as { spawn: unknown }).spawn = vi.fn().mockImplementation(async () => ({
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start: (c) => c.close() }),
+      exit: new Promise<number>(() => undefined),
+      kill: () => undefined,
+    }));
+
+    // The event lane fires server-ready so runServerStep settles instead of waiting its 30 s fallback.
+    (runtime.on as ReturnType<typeof vi.fn>).mockImplementation((event: string, callback: () => void) => {
+      if (event === 'server-ready') {
+        setTimeout(callback, 0);
+      }
+
+      return () => undefined;
+    });
+
     const shell = createNexariActionShell(runtime);
     await shell.executeCommand('session-1', 'npm run dev', undefined, controller.signal);
 
     for (const call of runActionCommand.mock.calls) {
       expect(call[1]).toBe(controller.signal);
     }
+    expect(runtime.spawn).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'npm run dev'],
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it('refuses to start a pipeline step after the signal is already aborted', async () => {
@@ -259,5 +351,96 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
 
     expect(runActionCommand).toHaveBeenCalledTimes(1);
     expect(runActionCommand).toHaveBeenCalledWith('cat package.json', undefined);
+  });
+});
+
+/*
+ * E2E regression: the exact live failure shape — an artifact whose shell action
+ * is `npm install && npm run dev`, executed against a guest whose preview
+ * event lane only appears after boot (late-binding), with a consumer that
+ * subscribed before boot. The compound command MUST execute and the action
+ * MUST resolve instead of hanging on the never-exiting dev server.
+ */
+describe('regression: artifact shell action on a guest with a late event lane', () => {
+  it('executes the compound command and resolves the dev step on server-ready', async () => {
+    const executed: string[] = [];
+    const serverReadyListeners: Array<(...args: unknown[]) => void> = [];
+    const guest: Record<string, unknown> & { boot: () => Promise<void> } = {
+      state: 'ready' as const,
+      fs: {} as any,
+      boot: async () => {
+        // The preview lane appears exactly at boot completion (late binding).
+        (guest as { onGuestEvent?: unknown }).onGuestEvent = (
+          event: string,
+          listener: (...args: unknown[]) => void,
+        ) => {
+          if (event === 'server-ready') {
+            serverReadyListeners.push(listener);
+          }
+
+          return () => undefined;
+        };
+      },
+      spawn: async (command: string, args: string[] = []) => {
+        executed.push([command, ...args].join(' '));
+
+        return {
+          input: new WritableStream<string>(),
+          stdout: new ReadableStream<string>({
+            start: (c) => {
+              c.enqueue('ok');
+              c.close();
+            },
+          }),
+          stderr: new ReadableStream<string>({ start: (c) => c.close() }),
+          exit: Promise.resolve(0),
+          kill: () => undefined,
+        };
+      },
+      teardown: async () => undefined,
+    };
+
+    const runtime = createNexariRuntime({
+      boot: async () => guest as unknown as import('./nexari-runtime').NexariGuestRuntime,
+    });
+
+    // The adapter calls the boot factory, not guest.boot — expose the lane eagerly.
+    (guest as { onGuestEvent?: unknown }).onGuestEvent = (event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'server-ready') {
+        serverReadyListeners.push(listener);
+      }
+
+      return () => undefined;
+    };
+
+    const facade = createNexariBrowserRuntime(runtime);
+
+    // A previews-like consumer subscribes BEFORE the lane exists: late-bound.
+    const serverReadyEvents: unknown[][] = [];
+    facade.on('server-ready', (...args: unknown[]) => serverReadyEvents.push(args));
+
+    // The action-runner's runtime surface boot happens before actions run.
+    await facade.boot();
+
+    const shell = createNexariActionShell(facade);
+    const pending = shell.executeCommand('runner-1', 'npm install && npm run dev');
+
+    // Give the pipeline time to reach the dev step; fire the lane afterwards.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    for (const listener of [...serverReadyListeners]) {
+      listener(5173, 'http://localhost:5173');
+    }
+
+    const { exitCode } = (await pending)!;
+
+    expect(exitCode).toBe(0);
+    expect(executed).toEqual([
+      'sh -c npm install --ignore-scripts',
+      'sh -c npm install --no-save --ignore-scripts esbuild@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
+      'sh -c npm run dev',
+    ]);
+    expect(serverReadyEvents.length).toBeGreaterThan(0);
   });
 });

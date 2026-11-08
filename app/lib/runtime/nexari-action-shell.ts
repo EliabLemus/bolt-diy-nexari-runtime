@@ -134,6 +134,132 @@ function mapWasmSafeSegment(segment: string): string[] | null {
 }
 
 /**
+ * Final run targets of the wasm-safe pipeline (`npm run dev|preview|start`)
+ * are long-running servers: their process exit never resolves while the app
+ * is up. Executing them through the exit-joining action lane would hang the
+ * action (and every action queued behind it) forever. They instead run
+ * detached on the facade spawn lane and resolve as soon as the server is
+ * actually serving (server-ready event, ready output, or an open port).
+ */
+const SERVER_STEP_PATTERN = /^npm run (dev|preview|start)( -- .+)?$/;
+const SERVER_OUTPUT_READY_PATTERN =
+  /(local:|ready in|listening|server running|started server|https?:\/\/[^\s]+\.\S+:\d+)/i;
+const SERVER_STEP_TIMEOUT_MS = 30_000;
+
+interface ServerStepResult {
+  output: string;
+  exitCode: number;
+}
+
+function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: AbortSignal): Promise<ServerStepResult> {
+  return new Promise<ServerStepResult>((resolve, reject) => {
+    let settled = false;
+    let detachReady: (() => void) | undefined;
+    let detachPort: (() => void) | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      detachReady?.();
+      detachPort?.();
+
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+    };
+
+    const settle = (result: ServerStepResult) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    /*
+     * Subscribe before spawning: the preview event lane is late-bound on the
+     * facade (queued until the guest exposes it), so a subscription placed
+     * before the lane exists still fires on boot completion.
+     */
+    const onServerReady = () => settle({ output: '', exitCode: 0 });
+
+    try {
+      detachReady = runtime.on('server-ready', onServerReady);
+      detachPort = runtime.on('port', (port, kind) => {
+        if (kind === 'open') {
+          settle({ output: `port ${port} open`, exitCode: 0 });
+        }
+      });
+    } catch (error) {
+      // A runtime without the event lane still resolves through output/timeout.
+      void error;
+    }
+
+    if (signal?.aborted) {
+      fail(new Error('Nexari action command aborted.'));
+
+      return;
+    }
+
+    const onAbort = () => fail(new Error('Nexari action command aborted.'));
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    timeout = setTimeout(() => settle({ output: '', exitCode: 0 }), SERVER_STEP_TIMEOUT_MS);
+
+    void (async () => {
+      try {
+        const process = await runtime.spawn('sh', ['-c', step], { signal });
+        const reader = process.output.getReader();
+        let output = '';
+
+        void process.exit.then(
+          (exitCode) => {
+            // A server that exits on its own resolves with its real exit code.
+            settle({ output, exitCode });
+            void reader.cancel().catch(() => undefined);
+          },
+          () => undefined,
+        );
+
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) {
+            break;
+          }
+
+          output += value;
+
+          if (SERVER_OUTPUT_READY_PATTERN.test(output)) {
+            settle({ output, exitCode: 0 });
+            void reader.cancel().catch(() => undefined);
+
+            return;
+          }
+        }
+      } catch (error) {
+        fail(error);
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+    })();
+  });
+}
+
+/**
  * Nexari adapter over the facade's `sh -c` action-execution lane
  * (`runActionCommand`). Composition rule for the historical merged-output
  * contract: cleaned-stderr semantics do not exist on this lane, so output is
@@ -182,6 +308,18 @@ export function createNexariActionShell(runtime: NexariBrowserRuntime): ActionSh
         }
 
         output += `\n$ ${step}\n`;
+
+        if (SERVER_STEP_PATTERN.test(step)) {
+          /*
+           * Long-running server target: resolve on server readiness instead
+           * of joining process exit (which never resolves while serving).
+           */
+          const result = await runServerStep(runtime, step, signal);
+
+          output += result.output.length > 0 ? result.output : `[wasm-safe] server step accepted (${step})`;
+
+          return { output, exitCode: result.exitCode };
+        }
 
         const result = await runtime.runActionCommand(step, signal);
 

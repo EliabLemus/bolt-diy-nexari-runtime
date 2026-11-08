@@ -84,7 +84,12 @@ export class WorkbenchStore {
   }
 
   addToExecutionQueue(callback: () => Promise<void>) {
-    this.#globalExecutionQueue = this.#globalExecutionQueue.then(() => callback());
+    /*
+     * One failed task must not poison the shared queue: a rejection here
+     * would flip the chain to rejected and silently skip every later
+     * action (they would never execute). Isolate per task.
+     */
+    this.#globalExecutionQueue = this.#globalExecutionQueue.then(callback, callback);
   }
 
   get previews() {
