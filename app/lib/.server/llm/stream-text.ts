@@ -7,7 +7,7 @@ import { PromptLibrary } from '~/lib/common/prompt-library';
 import { allowedHTMLElements } from '~/utils/markdown';
 import { LLMManager } from '~/lib/modules/llm/manager';
 import { createScopedLogger } from '~/utils/logger';
-import { createFilesContext, extractPropertiesFromMessage } from './utils';
+import { createFilesContext, extractPropertiesFromMessage, stripEmptyTools } from './utils';
 import { getModernWebGuidance } from './mwg';
 import { discussPrompt } from '~/lib/common/prompts/discuss-prompt';
 import type { DesignScheme } from '~/types/design-scheme';
@@ -291,7 +291,7 @@ export async function streamText(props: {
     system: chatMode === 'build' ? systemPrompt : discussPrompt(),
     ...tokenParams,
     messages: convertToCoreMessages(processedMessages as any),
-    ...filteredOptions,
+    ...stripEmptyTools(filteredOptions),
 
     // Set temperature to 1 for reasoning models (required by OpenAI API)
     ...(isReasoning ? { temperature: 1 } : {}),

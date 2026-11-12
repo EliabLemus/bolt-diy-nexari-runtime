@@ -4,6 +4,25 @@ import { IGNORE_PATTERNS, type FileMap } from './constants';
 import ignore from 'ignore';
 import type { ContextAnnotation } from '~/types/context';
 
+// ponytail: empty MCP tools + toolChoice:'auto' makes free models hallucinate a
+// 'boltAction' tool call -> AI_NoSuchToolError kills the stream and all artifact
+// actions are lost. Only send tools when there actually are any.
+export function stripEmptyTools<T extends { tools?: unknown; toolChoice?: unknown; maxSteps?: unknown }>(
+  options: T | undefined,
+): T | undefined {
+  if (
+    options &&
+    typeof options.tools === 'object' &&
+    options.tools !== null &&
+    Object.keys(options.tools as object).length === 0
+  ) {
+    const { tools: _t, toolChoice: _c, maxSteps: _m, ...rest } = options;
+    return rest as T;
+  }
+
+  return options;
+}
+
 export function extractPropertiesFromMessage(message: Omit<Message, 'id'>): {
   model: string;
   provider: string;

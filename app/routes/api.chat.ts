@@ -41,9 +41,10 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 
 async function chatAction({ context, request }: ActionFunctionArgs) {
   const streamRecovery = new StreamRecoveryManager({
-    // ponytail: 90s — local 4B models stall >45s mid-generation on benign pauses
-    timeout: 90000,
-    maxRetries: 2,
+    // ponytail: 240s — free OpenRouter models stall >90s on tool-free phases; recovery
+    // must never fire mid-generation or pending artifact actions appear lost
+    timeout: 240000,
+    maxRetries: 1,
     onTimeout: () => {
       logger.warn('Stream timeout - attempting recovery');
     },
