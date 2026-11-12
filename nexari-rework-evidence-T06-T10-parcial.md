@@ -79,3 +79,38 @@ T10 — E2E navegador — **EN CURSO** (relanzamiento con `qwen3:4b-64k`)
 (p.ej. `ollama create qwen3:4b-64k -f Modelfile` verificando
 `ollama show qwen3:4b-64k | grep context`, o pasar `num_ctx` en
 `options` de la llamada `/api/chat`) y relanzar el E2E.
+
+## T10 — E2E navegador (tercera pasada, 2026-11-11) — **FALLIDA (nueva causa raíz identificada)**
+
+- Desbloqueo previo: se descargó el modelo (`ollama stop qwen3:4b-64k`,
+  exit 0) para forzar recarga con el `num_ctx 65536` del modelfile.
+  Verificado: tras carga manual via `/api/generate` con `keep_alive:-1`,
+  `/api/ps` reporta `context_length: 65536`.
+- Causa raíz REAL confirmada en código: `app/lib/modules/llm/providers/
+  ollama.ts` línea 131 envía `numCtx: this.getDefaultNumCtx(serverEnv)`,
+  que devuelve **32768 por defecto** si no está seteada la env
+  `DEFAULT_NUM_CTX`. Cada request de la app RE-CARGA el modelo a 32K
+  aunque se haya precargado a 64K — por eso `/api/ps` vuelve a mostrar
+  `context_length: 32768` durante la corrida.
+- Mitigación intentada: dev server relanzado con
+  `DEFAULT_NUM_CTX=65536` junto a `VITE_RUNTIME_BACKEND=nexari`. No fue
+  suficiente: `/api/ps` volvió a 32768 durante la generación (la env de
+  proceso no llega al `serverEnv` efectivo del provider en dev, o el
+  valor se resuelve por otra ruta — requiere investigar cómo el stack
+  Nexari propaga `serverEnv` al provider).
+- Corrida: 2 intentos de navegador (límite consumido). Ambos: chat
+  creado, fase "Analysing Request" (~30-40 s, generación activa en
+  Ollama), luego clavada en "Determining Files to Read" >3 min; dev log
+  muestra `stream-recovery` timeouts y "Max retries reached for stream
+  recovery". Workbench NUNCA montó: 0 iframes, 0 artifacts, 0 terminal.
+- Resultado tareas:
+  - 10.2: **FAIL** (sin completion real).
+  - 10.3–10.7: **NO-VERIFICABLE-E2E**.
+  - 11.1–11.6: **NO-VERIFICABLE-E2E**.
+- Dev server: sesión `proc_8a2d3ce1b149`, eliminado al terminar.
+
+**Desbloqueo real**: hacer que el request del provider incluya
+`num_ctx: 65536` — setear `DEFAULT_NUM_CTX` por la ruta que el runtime
+Nexari usa para `serverEnv` (o cambiar el default de `getDefaultNumCtx`),
+verificando con `/api/ps` durante la generación que el contexto cargado
+es 65536.
