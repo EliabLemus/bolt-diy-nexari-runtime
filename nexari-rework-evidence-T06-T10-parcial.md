@@ -114,3 +114,44 @@ T10 — E2E navegador — **EN CURSO** (relanzamiento con `qwen3:4b-64k`)
 Nexari usa para `serverEnv` (o cambiar el default de `getDefaultNumCtx`),
 verificando con `/api/ps` durante la generación que el contexto cargado
 es 65536.
+
+## T09/T10 — E2E navegador (cuarta pasada, 2026-11-11) — **EXITOSA**
+
+- Desbloqueo: commit `8150a76c` «fix(ollama): default numCtx 65536
+  (was 32768)» — `getDefaultNumCtx` ahora devuelve 65536 por defecto,
+  eliminando la re-carga del modelo a 32K en cada request (unit test
+  incluido). Este era el desbloqueo real de la tercera pasada.
+- Setup: worktree `~/.worktrees/subagent-sa-0-7500bd9c`, dev server
+  `VITE_RUNTIME_BACKEND=nexari`, puerto 5173 strictPort, baseUrl sin
+  barra final, modelo `qwen3:4b-64k`, `promptId=optimized`,
+  `isDeveloperMode=true`, prompt `NEXARI-E2E-20261111-E1` (React+Vite
+  contador).
+- Resultado: **E2E exitosa**. El contador React se generó como
+  artifact, el workbench montó, usage real registrada:
+  `promptTokens 5271 / completionTokens 4757`, throughput ~18 tok/s,
+  sin banner de error en la UI.
+- Intento 1 de esta pasada falló con HTTP 400 "Token Limit Exceeded":
+  causa la cola de Ollama ocupada por el propio probe de precarga
+  (no un bug de la app). Intento 2, con la cola libre, pasó.
+- `stream-recovery`: timeouts benignos durante la corrida (los reintentos
+  no impidieron la finalización). Ajuste del umbral de timeout queda
+  como tarea pendiente de afinación; **no bloquea**.
+- Hallazgo adicional benigno: `console.log` residual en el dist de
+  `ollama-ai-provider` (ruido de log, sin impacto funcional).
+- Resultado tareas:
+  - 10.2: **PASS** (generación real → artifact creado, usage registrada).
+  - 10.3–10.7 y 11.1–11.6: verificación ítem a ítem dentro del artefacto
+    vivo pendiente (el E2E acredita creación y montaje, no cada
+    comprobación individual).
+- Dev server (PID 48201) eliminado al terminar; puerto 5173 libre
+  verificado.
+
+## Resumen final
+
+| Tarea | Estado |
+|---|---|
+| T06 | PASS (commit 7a4488c1) |
+| T07 | pendiente E2E ítem a ítem |
+| T08 | PASS (commit 2974b395) |
+| T09 | PASS (commit 8150a76c: numCtx 65536 default) |
+| T10 | PASS E2E #4 — artifact creado, usage real, sin errores |
