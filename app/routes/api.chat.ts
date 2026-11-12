@@ -3,6 +3,7 @@ import { createDataStream, generateId } from 'ai';
 import { MAX_RESPONSE_SEGMENTS, MAX_TOKENS, type FileMap } from '~/lib/.server/llm/constants';
 import { CONTINUE_PROMPT } from '~/lib/common/prompts/prompts';
 import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
+import { devServerInjection } from '~/lib/.server/llm/dev-server-injection';
 import SwitchableStream from '~/lib/.server/llm/switchable-stream';
 import type { IProviderSetting } from '~/types/model';
 import { createScopedLogger } from '~/utils/logger';
@@ -222,6 +223,20 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
           },
           onFinish: async ({ text: content, finishReason, usage }) => {
             logger.debug('usage', JSON.stringify(usage));
+
+            // Models (e.g. free OpenRouter models) sometimes skip the shell step
+            // that installs deps and starts the dev server. Inject it when the
+            // response contains file actions but no shell action, so the guest
+            // actually boots and the preview renders. The command maps through
+            // rewriteWasmSafeCommand, so it runs the tested wasm-safe pipeline.
+            if (content) {
+              const injection = devServerInjection(content);
+
+              if (injection !== null) {
+                dataStream.write(injection as Parameters<typeof dataStream.write>[0]);
+                logger.info('Injected auto-start dev-server shell action (model omitted shell step)');
+              }
+            }
 
             if (usage) {
               cumulativeUsage.completionTokens += usage.completionTokens || 0;
