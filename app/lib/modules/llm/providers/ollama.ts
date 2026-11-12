@@ -42,7 +42,8 @@ export default class OllamaProvider extends BaseProvider {
   getDefaultNumCtx(serverEnv?: Env): number {
     const envRecord = this.convertEnvToRecord(serverEnv);
 
-    return envRecord.DEFAULT_NUM_CTX ? parseInt(envRecord.DEFAULT_NUM_CTX, 10) : 32768;
+    // ponytail: 64K default so 28K prompts don't force a 32K model reload; override with DEFAULT_NUM_CTX
+    return envRecord.DEFAULT_NUM_CTX ? parseInt(envRecord.DEFAULT_NUM_CTX, 10) : 65536;
   }
 
   private _resolveBaseUrl(
