@@ -308,6 +308,38 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     await expect(pending).resolves.toEqual(expect.objectContaining({ exitCode: 0 }));
   });
 
+  it('regression T06/S11: action output streams into the visible terminal sink before the step settles', async () => {
+    const { runtime } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+
+    const seen: string[] = [];
+    (runtime.on as ReturnType<typeof vi.fn>).mockImplementation(() => () => undefined);
+
+    /*
+     * The server prints its ready banner and keeps running (exit pending).
+     * The sink must already carry the executed step and the banner — the
+     * visible terminal must not wait for the process to exit.
+     */
+    (runtime as unknown as { spawn: unknown }).spawn = vi.fn().mockImplementation(async () => ({
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({
+        start(controller) {
+          controller.enqueue('VITE ready in 300 ms\nLocal: http://localhost:5173/\n');
+        },
+      }),
+      exit: new Promise<number>(() => undefined),
+      kill: () => undefined,
+    }));
+
+    const shell = createNexariActionShell(runtime, (chunk) => seen.push(chunk));
+    void shell.executeCommand('session-1', 'npm run dev');
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await shell.assertRunnable();
+
+    expect(seen.join('')).toContain('$ npm run dev');
+    expect(seen.join('')).toContain('VITE ready in 300 ms');
+  });
+
   it('shows the executed pipeline in the terminal output, not the original command', async () => {
     const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 

@@ -156,6 +156,10 @@ export class WorkbenchStore {
     this.#terminalStore.attachBoltTerminal(terminal);
   }
 
+  writeActionOutput(chunk: string) {
+    this.#terminalStore.writeActionOutput(chunk);
+  }
+
   detachTerminal(terminal: ITerminal) {
     this.#terminalStore.detachTerminal(terminal);
   }
@@ -497,7 +501,8 @@ export class WorkbenchStore {
       type,
       runner: new ActionRunner(
         createActionRunnerRuntime(runtimeBackend, webcontainer),
-        () => createActionShell(runtimeBackend, this.boltTerminal, webcontainer),
+        () =>
+          createActionShell(runtimeBackend, this.boltTerminal, webcontainer, (chunk) => this.writeActionOutput(chunk)),
         (alert) => {
           if (this.#reloadedMessages.has(messageId)) {
             return;

@@ -83,6 +83,17 @@ export class TerminalStore {
     }
   }
 
+  writeActionOutput(chunk: string) {
+    /*
+     * T06/S11: the action lane must be visible — mirror its output into every
+     * attached workbench terminal. Display only; the REPL sessions are
+     * untouched (their protocol reads the guest stream, not the display).
+     */
+    for (const { terminal } of this.#terminals) {
+      terminal.write(chunk);
+    }
+  }
+
   onTerminalResize(cols: number, rows: number) {
     for (const { process } of this.#terminals) {
       process.resize({ cols, rows });

@@ -177,7 +177,16 @@ interface ServerStepResult {
   exitCode: number;
 }
 
-function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: AbortSignal): Promise<ServerStepResult> {
+function runServerStep(
+  runtime: NexariBrowserRuntime,
+  step: string,
+  signal?: AbortSignal,
+  write?: (chunk: string) => void,
+): Promise<ServerStepResult> {
+  const echo = write ?? (() => undefined);
+
+  echo(`\n$ ${step}\n`);
+
   return new Promise<ServerStepResult>((resolve, reject) => {
     let settled = false;
     let detachReady: (() => void) | undefined;
@@ -282,6 +291,8 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
 
           output += value;
 
+          echo(value);
+
           if (SERVER_OUTPUT_READY_PATTERN.test(output) && stabilization === undefined) {
             /*
              * Ready line seen: do not settle immediately. Keep draining for
@@ -334,7 +345,9 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
  * abort signal propagated to the step in flight. Interactive workbench
  * terminal sessions do not go through this shell and are unaffected.
  */
-export function createNexariActionShell(runtime: NexariBrowserRuntime): ActionShell {
+export function createNexariActionShell(runtime: NexariBrowserRuntime, write?: (chunk: string) => void): ActionShell {
+  const echo = write ?? (() => undefined);
+
   return {
     async assertRunnable() {
       if (runtime.state === 'terminated') {
@@ -354,9 +367,13 @@ export function createNexariActionShell(runtime: NexariBrowserRuntime): ActionSh
       const steps = rewriteWasmSafeCommand(command);
 
       if (steps === null) {
+        echo(`\n$ ${command}\n`);
+
         const result = await runtime.runActionCommand(command, signal);
 
         const output = result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout;
+
+        echo(output);
 
         return { output, exitCode: result.exitCode };
       }
@@ -375,16 +392,22 @@ export function createNexariActionShell(runtime: NexariBrowserRuntime): ActionSh
            * Long-running server target: resolve on server readiness instead
            * of joining process exit (which never resolves while serving).
            */
-          const result = await runServerStep(runtime, step, signal);
+          const result = await runServerStep(runtime, step, signal, echo);
 
           output += result.output.length > 0 ? result.output : `[wasm-safe] server step accepted (${step})`;
+
+          echo(`\n${result.output.length > 0 ? result.output : `[wasm-safe] server step accepted (${step})`}\n`);
 
           return { output, exitCode: result.exitCode };
         }
 
+        echo(`\n$ ${step}\n`);
+
         const result = await runtime.runActionCommand(step, signal);
 
         output += result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout;
+
+        echo(result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout);
 
         if (result.exitCode !== 0) {
           output += `\n[wasm-safe] step failed with exit code ${result.exitCode}; stopping the pipeline.`;

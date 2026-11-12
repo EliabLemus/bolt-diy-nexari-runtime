@@ -51,6 +51,7 @@ export function createActionShell(
   backend: RuntimeBackend,
   boltTerminal: BoltShell,
   runtimePromise: Promise<unknown>,
+  writeActionOutput?: (chunk: string) => void,
 ): ActionShell {
   if (backend === 'stackblitz') {
     return createStackblitzActionShell(boltTerminal);
@@ -58,13 +59,13 @@ export function createActionShell(
 
   return {
     async assertRunnable() {
-      const nexariShell = createNexariActionShell(await resolveNexariFacade(runtimePromise));
+      const nexariShell = createNexariActionShell(await resolveNexariFacade(runtimePromise), writeActionOutput);
 
       await nexariShell.assertRunnable();
     },
 
     async executeCommand(sessionId, command, preempt, signal) {
-      const nexariShell = createNexariActionShell(await resolveNexariFacade(runtimePromise));
+      const nexariShell = createNexariActionShell(await resolveNexariFacade(runtimePromise), writeActionOutput);
 
       return nexariShell.executeCommand(sessionId, command, preempt, signal);
     },
