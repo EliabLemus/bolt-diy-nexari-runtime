@@ -256,21 +256,19 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
         const process = await runtime.spawn('sh', ['-c', step], { signal });
         const reader = process.output.getReader();
         let output = '';
-        let readerDone = false;
         let exitedCode: number | undefined;
 
         void process.exit.then(
           (exitCode) => {
             /*
-             * A server that exits on its own resolves with its real exit code —
-             * but only once the reader loop has finished draining, so a fast
-             * crash never wins the race and masks its own diagnostics.
+             * S10 gate: no branch of process.exit resolves or calls settle.
+             * Exit only records the code; resolution stays exclusively with
+             * server-ready, port:open, the ready output pattern (via the
+             * stabilization window) or the bounded timeout. A crashed server
+             * whose output stream closes settles through the reader loop
+             * below, which is the output path — never an exit branch.
              */
             exitedCode = exitCode;
-
-            if (readerDone) {
-              settle({ output, exitCode });
-            }
           },
           () => undefined,
         );
@@ -299,8 +297,6 @@ function runServerStep(runtime: NexariBrowserRuntime, step: string, signal?: Abo
             continue;
           }
         }
-
-        readerDone = true;
 
         if (stabilization !== undefined) {
           clearTimeout(stabilization);

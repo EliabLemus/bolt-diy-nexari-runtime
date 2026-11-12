@@ -271,6 +271,43 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     serverReady!();
     await expect(pending).resolves.toEqual(expect.objectContaining({ exitCode: 0 }));
   });
+  it('regression S10: a process that exits never settles the server step (resolution only via server-ready)', async () => {
+    const { runtime } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+
+    let serverReady: (() => void) | undefined;
+    (runtime.on as ReturnType<typeof vi.fn>).mockImplementation((event: string, callback: () => void) => {
+      if (event === 'server-ready') {
+        serverReady = callback;
+      }
+
+      return () => undefined;
+    });
+
+    /*
+     * The forbidden shape: the process exits immediately (exit resolves with
+     * its real code) while the output stream stays open and never prints a
+     * ready line. No process.exit branch may resolve the step — it must stay
+     * pending until server-ready arrives.
+     */
+    (runtime as unknown as { spawn: unknown }).spawn = vi.fn().mockImplementation(async () => ({
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>(), // never closes, no ready pattern
+      exit: Promise.resolve(37),
+      kill: () => undefined,
+    }));
+
+    const shell = createNexariActionShell(runtime);
+    const pending = shell.executeCommand('session-1', 'npm run dev');
+
+    let settledByExit = false;
+    void pending.then(() => (settledByExit = true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settledByExit).toBe(false);
+
+    serverReady!();
+    await expect(pending).resolves.toEqual(expect.objectContaining({ exitCode: 0 }));
+  });
+
   it('shows the executed pipeline in the terminal output, not the original command', async () => {
     const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 
