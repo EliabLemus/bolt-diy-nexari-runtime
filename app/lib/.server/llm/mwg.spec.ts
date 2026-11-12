@@ -11,6 +11,7 @@ describe('getModernWebGuidance', () => {
   it('is empty when disabled via MODERN_WEB_GUIDANCE=off', async () => {
     vi.resetModules();
     process.env.MODERN_WEB_GUIDANCE = 'off';
+
     const { getModernWebGuidance } = await import('./mwg');
     expect(await getModernWebGuidance('build a landing page')).toBe('');
     delete process.env.MODERN_WEB_GUIDANCE;
@@ -18,6 +19,7 @@ describe('getModernWebGuidance', () => {
 
   it('is empty for empty queries', async () => {
     vi.resetModules();
+
     const { getModernWebGuidance } = await import('./mwg');
     expect(await getModernWebGuidance('   ')).toBe('');
   });
@@ -26,6 +28,7 @@ describe('getModernWebGuidance', () => {
     const execFileMock = vi.fn((_cmd: string, _args: string[], _opts: any, cb: any) => cb(null, sample));
     vi.doMock('child_process', () => ({ execFile: execFileMock }));
     vi.resetModules();
+
     const { getModernWebGuidance } = await import('./mwg');
     const out = await getModernWebGuidance('react counter component');
     expect(out).toContain('MODERN WEB GUIDANCE');

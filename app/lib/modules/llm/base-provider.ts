@@ -123,8 +123,14 @@ export abstract class BaseProvider implements ProviderInfo {
     providerSettings?: Record<string, IProviderSetting>;
     serverEnv?: Record<string, string>;
   }) {
-    // Only include provider-relevant env keys, not the entire server environment
-    const relevantEnvKeys = [this.config.baseUrlKey, this.config.apiTokenKey].filter(Boolean) as string[];
+    /*
+     * Only include provider-relevant env keys, not the entire server environment
+     * ponytail: DEFAULT_NUM_CTX changes ollama's numCtx (ollama.ts), so it must
+     * invalidate the dynamic-models cache like baseUrl/apiToken do.
+     */
+    const relevantEnvKeys = [this.config.baseUrlKey, this.config.apiTokenKey, 'DEFAULT_NUM_CTX'].filter(
+      Boolean,
+    ) as string[];
     const relevantEnv: Record<string, string> = {};
 
     for (const key of relevantEnvKeys) {

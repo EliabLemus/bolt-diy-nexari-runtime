@@ -222,9 +222,7 @@ export async function streamText(props: {
 
   if (chatMode === 'build') {
     const lastUserMessage = [...processedMessages].reverse().find((m) => m.role === 'user')?.content;
-    systemPrompt += await getModernWebGuidance(
-      typeof lastUserMessage === 'string' ? lastUserMessage : '',
-    );
+    systemPrompt += await getModernWebGuidance(typeof lastUserMessage === 'string' ? lastUserMessage : '');
   }
 
   logger.info(`Sending llm call to ${provider.name} with model ${modelDetails.name}`);

@@ -28,12 +28,11 @@ describe('OllamaProvider.getDynamicModels maxTokenAllowed', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        models: [
-          { name: 'qwen3:4b', model: 'qwen3:4b', details: { parameter_size: '4B' } },
-        ],
+        models: [{ name: 'qwen3:4b', model: 'qwen3:4b', details: { parameter_size: '4B' } }],
       }),
     });
     vi.stubGlobal('fetch', fetchMock);
+
     const models = await provider.getDynamicModels(undefined, { baseUrl: 'http://localhost:11434' } as any, {});
     expect(models[0].maxTokenAllowed).toBeGreaterThanOrEqual(8192);
     vi.unstubAllGlobals();

@@ -11,7 +11,7 @@ import { getFilePaths, selectContext } from '~/lib/.server/llm/select-context';
 import type { ContextAnnotation, ProgressAnnotation } from '~/types/context';
 import { WORK_DIR } from '~/utils/constants';
 import { createSummary } from '~/lib/.server/llm/create-summary';
-import { extractPropertiesFromMessage } from '~/lib/.server/llm/utils';
+import { extractPropertiesFromMessage, isNoSuchToolError } from '~/lib/.server/llm/utils';
 import type { DesignScheme } from '~/types/design-scheme';
 import { MCPService } from '~/lib/services/mcpService';
 import { StreamRecoveryManager } from '~/lib/.server/llm/stream-recovery';
@@ -42,8 +42,10 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 
 async function chatAction({ context, request }: ActionFunctionArgs) {
   const streamRecovery = new StreamRecoveryManager({
-    // ponytail: 240s — free OpenRouter models stall >90s on tool-free phases; recovery
-    // must never fire mid-generation or pending artifact actions appear lost
+    /*
+     * ponytail: 240s — free OpenRouter models stall >90s on tool-free phases; recovery
+     * must never fire mid-generation or pending artifact actions appear lost
+     */
     timeout: 240000,
     maxRetries: 1,
     onTimeout: () => {
@@ -224,11 +226,13 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
           onFinish: async ({ text: content, finishReason, usage }) => {
             logger.debug('usage', JSON.stringify(usage));
 
-            // Models (e.g. free OpenRouter models) sometimes skip the shell step
-            // that installs deps and starts the dev server. Inject it when the
-            // response contains file actions but no shell action, so the guest
-            // actually boots and the preview renders. The command maps through
-            // rewriteWasmSafeCommand, so it runs the tested wasm-safe pipeline.
+            /*
+             * Models (e.g. free OpenRouter models) sometimes skip the shell step
+             * that installs deps and starts the dev server. Inject it when the
+             * response contains file actions but no shell action, so the guest
+             * actually boots and the preview renders. The command maps through
+             * rewriteWasmSafeCommand, so it runs the tested wasm-safe pipeline.
+             */
             if (content) {
               const injection = devServerInjection(content);
 
@@ -305,6 +309,16 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
               for await (const part of result.fullStream) {
                 if (part.type === 'error') {
                   const error: any = part.error;
+
+                  if (isNoSuchToolError(error)) {
+                    /*
+                     * Hallucinated tool call: log it and keep streaming instead of
+                     * killing the stream (artifact actions already sent survive).
+                     */
+                    logger.warn(`Model called unknown tool '${error?.toolName ?? 'unknown'}'; continuing stream`);
+                    continue;
+                  }
+
                   logger.error(`${error}`);
 
                   return;
@@ -346,6 +360,13 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
 
             if (part.type === 'error') {
               const error: any = part.error;
+
+              if (isNoSuchToolError(error)) {
+                // Hallucinated tool call: keep streaming, don't kill the response.
+                logger.warn(`Model called unknown tool '${error?.toolName ?? 'unknown'}'; continuing stream`);
+                continue;
+              }
+
               logger.error('Streaming error:', error);
               streamRecovery.stop();
 

@@ -4,9 +4,24 @@ import { IGNORE_PATTERNS, type FileMap } from './constants';
 import ignore from 'ignore';
 import type { ContextAnnotation } from '~/types/context';
 
-// ponytail: empty MCP tools + toolChoice:'auto' makes free models hallucinate a
-// 'boltAction' tool call -> AI_NoSuchToolError kills the stream and all artifact
-// actions are lost. Only send tools when there actually are any.
+/*
+ * ponytail: empty MCP tools + toolChoice:'auto' makes free models hallucinate a
+ * 'boltAction' tool call -> AI_NoSuchToolError kills the stream and all artifact
+ * actions are lost. Only send tools when there actually are any.
+ * ponytail: free models hallucinate tool calls that don't exist (empty or MCP-less
+ * tool set). AI SDK surfaces that as AI_NoSuchToolError in the fullStream; treat it
+ * as non-fatal so the stream (and any artifact actions already sent) survive.
+ */
+export function isNoSuchToolError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const e = error as { name?: string; message?: string };
+
+  return e.name === 'AI_NoSuchToolError' || /NoSuchToolError/.test(e.message ?? '');
+}
+
 export function stripEmptyTools<T extends { tools?: unknown; toolChoice?: unknown; maxSteps?: unknown }>(
   options: T | undefined,
 ): T | undefined {

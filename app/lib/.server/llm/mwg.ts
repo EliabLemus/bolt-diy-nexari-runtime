@@ -31,11 +31,8 @@ export async function getModernWebGuidance(userMessage: string): Promise<string>
   if (!results) {
     try {
       results = await new Promise<MwgUseCase[]>((resolve, reject) => {
-        execFile(
-          'npx',
-          ['modern-web-guidance', 'search', query],
-          { timeout: 10_000 },
-          (err, stdout) => (err ? reject(err) : resolve(JSON.parse(stdout))),
+        execFile('npx', ['modern-web-guidance', 'search', query], { timeout: 10_000 }, (err, stdout) =>
+          err ? reject(err) : resolve(JSON.parse(stdout)),
         );
       });
       cache.set(query, results);

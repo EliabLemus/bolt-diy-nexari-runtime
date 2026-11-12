@@ -37,18 +37,24 @@ export class EnhancedStreamingMessageParser extends StreamingMessageParser {
   parse(messageId: string, input: string): string {
     const rawInput = input;
 
-    // Models (e.g. qwen3:4b-64k) emit bare <boltAction> tags without the
-    // <boltArtifact> wrapper, so onArtifactOpen never fires and the workbench
-    // never mounts. The base parser is a stateful cumulative scanner: callers
-    // (useMessageParser) feed accumulated text and append whatever we return.
-    // Therefore the wrapper must be injected AHEAD of the parser cursor and the
-    // already-emitted output suppressed, otherwise the injection shifts the
-    // buffer under the cursor (callbacks never fire) or duplicates chat text.
-    // Injecting right before the first <boltAction keeps the output prefix
-    // byte-identical, so slicing off previously-returned length is exact.
-    // ponytail: a model that emits a real <boltArtifact> AFTER a bare
-    // <boltAction> would double-open; sticky per message, fix only if observed.
-    if (!this._syntheticArtifactWraps.has(messageId) && !rawInput.includes('<boltArtifact') && rawInput.includes('<boltAction')) {
+    /*
+     * Models (e.g. qwen3:4b-64k) emit bare <boltAction> tags without the
+     * <boltArtifact> wrapper, so onArtifactOpen never fires and the workbench
+     * never mounts. The base parser is a stateful cumulative scanner: callers
+     * (useMessageParser) feed accumulated text and append whatever we return.
+     * Therefore the wrapper must be injected AHEAD of the parser cursor and the
+     * already-emitted output suppressed, otherwise the injection shifts the
+     * buffer under the cursor (callbacks never fire) or duplicates chat text.
+     * Injecting right before the first <boltAction keeps the output prefix
+     * byte-identical, so slicing off previously-returned length is exact.
+     * ponytail: a model that emits a real <boltArtifact> AFTER a bare
+     * <boltAction> would double-open; sticky per message, fix only if observed.
+     */
+    if (
+      !this._syntheticArtifactWraps.has(messageId) &&
+      !rawInput.includes('<boltArtifact') &&
+      rawInput.includes('<boltAction')
+    ) {
       this._syntheticArtifactWraps.add(messageId);
     }
 
@@ -61,8 +67,10 @@ export class EnhancedStreamingMessageParser extends StreamingMessageParser {
     // First try the normal parsing
     let output = super.parse(messageId, input);
 
-    // Suppress output already handed to the caller on earlier cumulative calls
-    // (only the synthetic-wrapper path re-renders previously emitted text).
+    /*
+     * Suppress output already handed to the caller on earlier cumulative calls
+     * (only the synthetic-wrapper path re-renders previously emitted text).
+     */
     if (this._syntheticArtifactWraps.has(messageId)) {
       const emitted = Math.min(this._emittedOutput.get(messageId) ?? 0, output.length);
       output = output.slice(emitted);
