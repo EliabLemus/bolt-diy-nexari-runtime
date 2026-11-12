@@ -86,7 +86,10 @@ export const ChatImpl = memo(
     useShortcuts();
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
+
+    // Derive chatStarted from chatStore so it survives remounts (history.replaceState)
+    const { started: chatStarted } = useStore(chatStore);
+    const [animationScope, animate] = useAnimate();
     const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
     const [imageDataList, setImageDataList] = useState<string[]>([]);
     const [searchParams, setSearchParams] = useSearchParams();
@@ -111,7 +114,6 @@ export const ChatImpl = memo(
       return (PROVIDER_LIST.find((p) => p.name === savedProvider) || DEFAULT_PROVIDER) as ProviderInfo;
     });
     const { showChat } = useStore(chatStore);
-    const [animationScope, animate] = useAnimate();
     const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
     const [chatMode, setChatMode] = useState<'discuss' | 'build'>('build');
     const [selectedElement, setSelectedElement] = useState<ElementInfo | null>(null);
@@ -323,14 +325,13 @@ export const ChatImpl = memo(
         return;
       }
 
+      // Set store before animating so a stalled animation can't leave chat unstarted
+      chatStore.setKey('started', true);
+
       await Promise.all([
         animate('#examples', { opacity: 0, display: 'none' }, { duration: 0.1 }),
         animate('#intro', { opacity: 0, flex: 1 }, { duration: 0.2, ease: cubicEasingFn }),
       ]);
-
-      chatStore.setKey('started', true);
-
-      setChatStarted(true);
     };
 
     // Helper function to create message parts array from text and images
@@ -407,7 +408,7 @@ export const ChatImpl = memo(
         finalMessageContent = messageContent + elementInfo;
       }
 
-      runAnimation();
+      runAnimation().catch((e) => console.warn('runAnimation failed:', e));
 
       if (!chatStarted) {
         setFakeLoading(true);
