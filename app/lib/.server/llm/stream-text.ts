@@ -8,6 +8,7 @@ import { allowedHTMLElements } from '~/utils/markdown';
 import { LLMManager } from '~/lib/modules/llm/manager';
 import { createScopedLogger } from '~/utils/logger';
 import { createFilesContext, extractPropertiesFromMessage } from './utils';
+import { getModernWebGuidance } from './mwg';
 import { discussPrompt } from '~/lib/common/prompts/discuss-prompt';
 import type { DesignScheme } from '~/types/design-scheme';
 
@@ -217,6 +218,13 @@ export async function streamText(props: {
     `;
   } else {
     console.log('No locked files found from any source for prompt.');
+  }
+
+  if (chatMode === 'build') {
+    const lastUserMessage = [...processedMessages].reverse().find((m) => m.role === 'user')?.content;
+    systemPrompt += await getModernWebGuidance(
+      typeof lastUserMessage === 'string' ? lastUserMessage : '',
+    );
   }
 
   logger.info(`Sending llm call to ${provider.name} with model ${modelDetails.name}`);

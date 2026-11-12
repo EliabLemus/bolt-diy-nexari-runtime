@@ -36,6 +36,7 @@ Abre `http://localhost:5173`, elige tu modelo local de Ollama y escribe tu prime
 
 - **[bolt.diy](https://github.com/stackblitz-labs/bolt.diy)** (MIT) — fork base de la UI y el flujo de chat/artifacts. Créditos a StackBlitz, Cole Medin y la comunidad de bolt.diy.
 - **Vivari** (Apache-2.0; paquetes `@vivari/core`, `@vivari/react` y afines bajo MIT) — runtime que ejecuta y previsualiza los proyectos generados directamente en el navegador.
+- **[Modern Web Guidance](https://github.com/GoogleChrome/modern-web-guidance)** (Apache-2.0) — GoogleChrome; guía de buenas prácticas web modernas inyectada al prompt de generación (desactivable con `MODERN_WEB_GUIDANCE=off`).
 
 ## Licencia
 
