@@ -910,7 +910,12 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
             alignItems: 'center',
           }}
         >
-          {activePreview ? (
+          {/*
+            S21: the UI must respect readiness, not just the store. A preview
+            entry without ready=true (port:open only, no server-ready yet) is
+            a dead iframe — render it only once the server actually answered.
+          */}
+          {activePreview?.ready ? (
             <>
               {isDeviceModeOn && showDeviceFrameInPreview ? (
                 <div
@@ -1012,7 +1017,7 @@ export const Preview = memo(({ setSelectedElement }: PreviewProps) => {
             </>
           ) : (
             <div className="flex w-full h-full justify-center items-center bg-bolt-elements-background-depth-1 text-bolt-elements-textPrimary">
-              No preview available
+              {activePreview ? 'Starting preview…' : 'No preview available'}
             </div>
           )}
 
