@@ -90,7 +90,8 @@ export default class OllamaProvider extends BaseProvider {
         name: model.name,
         label: `${model.name} (${model.details.parameter_size})`,
         provider: this.name,
-        maxTokenAllowed: 8000,
+        // ponytail: match numCtx default (65536) — metadata 8000 made api.llmcall 400 'Token Limit Exceeded' (8192 > 8000)
+        maxTokenAllowed: this.getDefaultNumCtx(serverEnv as any),
       }));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'TimeoutError') {

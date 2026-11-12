@@ -20,3 +20,22 @@ describe('OllamaProvider.getDefaultNumCtx', () => {
     expect(provider.getDefaultNumCtx({ DEFAULT_NUM_CTX: '32768' } as any)).toBe(32768);
   });
 });
+
+describe('OllamaProvider.getDynamicModels maxTokenAllowed', () => {
+  // regression: metadata 8000 < completion request 8192 -> api.llmcall 400 'Token Limit Exceeded'
+  it('reports maxTokenAllowed >= Ollama completion limit (8192)', async () => {
+    const provider = new OllamaProvider();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: [
+          { name: 'qwen3:4b', model: 'qwen3:4b', details: { parameter_size: '4B' } },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const models = await provider.getDynamicModels(undefined, { baseUrl: 'http://localhost:11434' } as any, {});
+    expect(models[0].maxTokenAllowed).toBeGreaterThanOrEqual(8192);
+    vi.unstubAllGlobals();
+  });
+});
