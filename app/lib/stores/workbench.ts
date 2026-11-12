@@ -1,8 +1,12 @@
 import { atom, map, type MapStore, type ReadableAtom, type WritableAtom } from 'nanostores';
 import type { EditorDocument, ScrollPosition } from '~/components/editor/codemirror/CodeMirrorEditor';
 import { ActionRunner } from '~/lib/runtime/action-runner';
+import { createActionShell } from '~/lib/runtime/action-shell-selector';
 import type { ActionCallbackData, ArtifactCallbackData } from '~/lib/runtime/message-parser';
-import { webcontainer } from '~/lib/webcontainer';
+import { runtimeBackend, webcontainer } from '~/lib/webcontainer';
+import { createPreviewsRuntime } from '~/lib/runtime/previews-runtime-selector';
+import { createActionRunnerRuntime } from '~/lib/runtime/action-runner-runtime-selector';
+import { createFilesStoreRuntime } from '~/lib/runtime/files-store-runtime-selector';
 import type { ITerminal } from '~/types/terminal';
 import { unreachable } from '~/utils/unreachable';
 import { EditorStore } from './editor';
@@ -36,10 +40,10 @@ type Artifacts = MapStore<Record<string, ArtifactState>>;
 export type WorkbenchViewType = 'code' | 'diff' | 'preview';
 
 export class WorkbenchStore {
-  #previewsStore = new PreviewsStore(webcontainer);
-  #filesStore = new FilesStore(webcontainer);
+  #previewsStore = new PreviewsStore(createPreviewsRuntime(runtimeBackend, webcontainer));
+  #filesStore = new FilesStore(createFilesStoreRuntime(runtimeBackend, webcontainer));
   #editorStore = new EditorStore(this.#filesStore);
-  #terminalStore = new TerminalStore(webcontainer);
+  #terminalStore = new TerminalStore(runtimeBackend, webcontainer);
 
   #reloadedMessages = new Set<string>();
 
@@ -80,7 +84,12 @@ export class WorkbenchStore {
   }
 
   addToExecutionQueue(callback: () => Promise<void>) {
-    this.#globalExecutionQueue = this.#globalExecutionQueue.then(() => callback());
+    /*
+     * One failed task must not poison the shared queue: a rejection here
+     * would flip the chain to rejected and silently skip every later
+     * action (they would never execute). Isolate per task.
+     */
+    this.#globalExecutionQueue = this.#globalExecutionQueue.then(callback, callback);
   }
 
   get previews() {
@@ -147,12 +156,21 @@ export class WorkbenchStore {
     this.#terminalStore.attachBoltTerminal(terminal);
   }
 
+  writeActionOutput(chunk: string) {
+    this.#terminalStore.writeActionOutput(chunk);
+  }
+
   detachTerminal(terminal: ITerminal) {
     this.#terminalStore.detachTerminal(terminal);
   }
 
   onTerminalResize(cols: number, rows: number) {
     this.#terminalStore.onTerminalResize(cols, rows);
+  }
+
+  /** Dispose ephemeral terminal sessions before this HMR instance is replaced. */
+  dispose() {
+    this.#terminalStore.dispose();
   }
 
   setDocuments(files: FileMap) {
@@ -482,8 +500,9 @@ export class WorkbenchStore {
       closed: false,
       type,
       runner: new ActionRunner(
-        webcontainer,
-        () => this.boltTerminal,
+        createActionRunnerRuntime(runtimeBackend, webcontainer),
+        () =>
+          createActionShell(runtimeBackend, this.boltTerminal, webcontainer, (chunk) => this.writeActionOutput(chunk)),
         (alert) => {
           if (this.#reloadedMessages.has(messageId)) {
             return;
@@ -942,3 +961,9 @@ export class WorkbenchStore {
 }
 
 export const workbenchStore = new WorkbenchStore();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    workbenchStore.dispose();
+  });
+}

@@ -1,4 +1,4 @@
-import type { PathWatcherEvent, WebContainer } from '@webcontainer/api';
+import type { PathWatcherEvent, WatchPathsOptions } from '@webcontainer/api';
 import { getEncoding } from 'istextorbinary';
 import { map, type MapStore } from 'nanostores';
 import { Buffer } from 'node:buffer';
@@ -8,6 +8,7 @@ import { WORK_DIR } from '~/utils/constants';
 import { computeFileModifications } from '~/utils/diff';
 import { createScopedLogger } from '~/utils/logger';
 import { unreachable } from '~/utils/unreachable';
+import type { FilesStoreRuntimeSurface } from '~/lib/runtime/files-store-runtime-selector';
 import {
   addLockedFile,
   removeLockedFile,
@@ -45,7 +46,13 @@ type Dirent = File | Folder;
 export type FileMap = Record<string, Dirent | undefined>;
 
 export class FilesStore {
-  #webcontainer: Promise<WebContainer>;
+  /*
+   * Backend-aware filesystem surface: the raw WebContainer promise on the
+   * stackblitz control path, a verified facade-backed adapter on nexari.
+   * Selection happens once, at construction (workbench.ts), mirroring how
+   * ActionRunner and the action shell consume the same shared promise.
+   */
+  #runtime: Promise<FilesStoreRuntimeSurface>;
 
   /**
    * Tracks the number of files without folders.
@@ -73,8 +80,8 @@ export class FilesStore {
     return this.#size;
   }
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
+  constructor(runtimePromise: Promise<FilesStoreRuntimeSurface>) {
+    this.#runtime = runtimePromise;
 
     // Load deleted paths from localStorage if available
     try {
@@ -548,7 +555,7 @@ export class FilesStore {
   }
 
   async saveFile(filePath: string, content: string) {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     try {
       const relativePath = path.relative(webcontainer.workdir, filePath);
@@ -590,20 +597,30 @@ export class FilesStore {
   }
 
   async #init() {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     // Clean up any files that were previously deleted
     this.#cleanupDeletedFiles();
 
-    // Set up file watcher
-    webcontainer.internal.watchPaths(
-      {
-        include: [`${WORK_DIR}/**`],
-        exclude: ['**/node_modules', '.git', '**/package-lock.json'],
-        includeContent: true,
-      },
-      bufferWatchEvents(100, this.#processEventBuffer.bind(this)),
-    );
+    /*
+     * Filesystem watching exists only on the stackblitz control path. The
+     * nexari surface omits `internal` (typed absence), so watching is
+     * skipped with a visible log instead of triggering the facade's typed
+     * refusal mid-init. Store cleanup and lock loading still run on every
+     * backend; watch-driven file discovery is a later nexari slice.
+     */
+    if (webcontainer.internal) {
+      webcontainer.internal.watchPaths(
+        {
+          include: [`${WORK_DIR}/**`],
+          exclude: ['**/node_modules', '.git', '**/package-lock.json'],
+          includeContent: true,
+        } satisfies WatchPathsOptions,
+        bufferWatchEvents(100, this.#processEventBuffer.bind(this)),
+      );
+    } else {
+      logger.warn('Filesystem watching unavailable on this runtime backend; skipping watch setup.');
+    }
 
     // Get the current chat ID
     const currentChatId = getCurrentChatId();
@@ -768,7 +785,7 @@ export class FilesStore {
   }
 
   async createFile(filePath: string, content: string | Uint8Array = '') {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     try {
       const relativePath = path.relative(webcontainer.workdir, filePath);
@@ -821,7 +838,7 @@ export class FilesStore {
   }
 
   async createFolder(folderPath: string) {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     try {
       const relativePath = path.relative(webcontainer.workdir, folderPath);
@@ -844,7 +861,7 @@ export class FilesStore {
   }
 
   async deleteFile(filePath: string) {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     try {
       const relativePath = path.relative(webcontainer.workdir, filePath);
@@ -876,7 +893,7 @@ export class FilesStore {
   }
 
   async deleteFolder(folderPath: string) {
-    const webcontainer = await this.#webcontainer;
+    const webcontainer = await this.#runtime;
 
     try {
       const relativePath = path.relative(webcontainer.workdir, folderPath);

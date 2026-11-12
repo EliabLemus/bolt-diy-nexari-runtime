@@ -1,5 +1,6 @@
 import type { WebContainer } from '@webcontainer/api';
 import { atom } from 'nanostores';
+import type { PreviewsRuntimeSurface } from '~/lib/runtime/previews-runtime-selector';
 
 // Extend Window interface to include our custom property
 declare global {
@@ -19,7 +20,14 @@ const PREVIEW_CHANNEL = 'preview-updates';
 
 export class PreviewsStore {
   #availablePreviews = new Map<number, PreviewInfo>();
-  #webcontainer: Promise<WebContainer>;
+
+  /*
+   * Backend-selected preview-event surface: the raw WebContainer on the
+   * stackblitz control path, a verified facade-backed lane on nexari. Only
+   * `server-ready` and `port` are consumed here, so both backends share the
+   * exact same subscription code below.
+   */
+  #runtime: Promise<PreviewsRuntimeSurface>;
   #broadcastChannel?: BroadcastChannel;
   #lastUpdate = new Map<string, number>();
   #watchedFiles = new Set<string>();
@@ -29,8 +37,8 @@ export class PreviewsStore {
 
   previews = atom<PreviewInfo[]>([]);
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
+  constructor(runtimePromise: Promise<PreviewsRuntimeSurface> | Promise<WebContainer>) {
+    this.#runtime = runtimePromise;
     this.#broadcastChannel = this.#maybeCreateChannel(PREVIEW_CHANNEL);
     this.#storageChannel = this.#maybeCreateChannel('storage-sync-channel');
 
@@ -167,11 +175,26 @@ export class PreviewsStore {
   }
 
   async #init() {
-    const webcontainer = await this.#webcontainer;
+    const runtime = await this.#runtime;
 
     // Listen for server ready events
-    webcontainer.on('server-ready', (port, url) => {
+    runtime.on('server-ready', (port, url) => {
       console.log('[Preview] Server ready on port:', port, url);
+
+      // A preview only becomes ready when the server-ready event fires.
+      const previews = this.previews.get();
+      let previewInfo = this.#availablePreviews.get(port);
+
+      if (!previewInfo) {
+        previewInfo = { port, ready: true, baseUrl: url };
+        this.#availablePreviews.set(port, previewInfo);
+        previews.push(previewInfo);
+      }
+
+      previewInfo.ready = true;
+      previewInfo.baseUrl = url;
+      this.previews.set([...previews]);
+
       this.broadcastUpdate(url);
 
       // Initial storage sync when preview is ready
@@ -179,7 +202,7 @@ export class PreviewsStore {
     });
 
     // Listen for port events
-    webcontainer.on('port', (port, type, url) => {
+    runtime.on('port', (port, type, url) => {
       let previewInfo = this.#availablePreviews.get(port);
 
       if (type === 'close' && previewInfo) {
@@ -191,13 +214,16 @@ export class PreviewsStore {
 
       const previews = this.previews.get();
 
+      /*
+       * Registering the port does NOT mark the preview ready;
+       * only the `server-ready` event flips ready to true.
+       */
       if (!previewInfo) {
-        previewInfo = { port, ready: type === 'open', baseUrl: url };
+        previewInfo = { port, ready: false, baseUrl: url };
         this.#availablePreviews.set(port, previewInfo);
         previews.push(previewInfo);
       }
 
-      previewInfo.ready = type === 'open';
       previewInfo.baseUrl = url;
 
       this.previews.set([...previews]);
@@ -210,8 +236,17 @@ export class PreviewsStore {
 
   // Helper to extract preview ID from URL
   getPreviewId(url: string): string | null {
-    const match = url.match(/^https?:\/\/([^.]+)\.local-credentialless\.webcontainer-api\.io/);
-    return match ? match[1] : null;
+    // WebContainer preview URLs: https://<id>.local-credentialless.webcontainer-api.io
+    const wcMatch = url.match(/^https?:\/\/([^.]+)\.local-credentialless\.webcontainer-api\.io/);
+
+    if (wcMatch) {
+      return wcMatch[1];
+    }
+
+    // Nexari preview URLs (vivari SDK): https://<host>/preview/<port>/...
+    const nexariMatch = url.match(/^https?:\/\/[^/]+\/preview\/(\d+)/);
+
+    return nexariMatch ? `nexari-${nexariMatch[1]}` : null;
   }
 
   // Broadcast state change to all tabs

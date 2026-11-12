@@ -79,7 +79,10 @@
     "@lezer/highlight": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.15.0",
     "@nanostores/react": "^0.7.3",
+    "@nexari/runtime-contract": "file:vendor/nexari-browser-stack/nexari-runtime-contract-0.1.0-dev.tgz",
+    "@nexari/vivari-adapter": "file:vendor/nexari-browser-stack/nexari-vivari-adapter-0.1.0-dev.tgz",
     "@octokit/rest": "^21.0.2",
+    "@vivari/core": "file:vendor/nexari-browser-stack/vivari-core-1.0.0.tgz",
     "@octokit/types": "^13.6.2",
     "@openrouter/ai-sdk-provider": "^0.0.5",
     "@phosphor-icons/react": "^2.1.7",
@@ -159,7 +162,8 @@
     "use-debounce": "^10.0.4",
     "vite-plugin-node-polyfills": "^0.22.0",
     "zod": "^3.24.1",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.3",
+    "@nexari/vivari-browser-assets": "file:vendor/nexari-browser-stack/nexari-vivari-browser-assets-0.1.0-dev.tgz"
   },
   "devDependencies": {
     "@blitz/eslint-plugin": "0.1.0",
@@ -210,6 +214,12 @@
   },
   "resolutions": {
     "@typescript-eslint/utils": "^8.0.0-alpha.30"
+  },
+  "pnpm": {
+    "overrides": {
+      "@nexari/runtime-contract": "file:vendor/nexari-browser-stack/nexari-runtime-contract-0.1.0-dev.tgz",
+      "@vivari/core": "file:vendor/nexari-browser-stack/vivari-core-1.0.0.tgz"
+    }
   },
   "packageManager": "pnpm@9.14.4"
 }

@@ -10,6 +10,8 @@ const logger = createScopedLogger('EnhancedMessageParser');
  */
 export class EnhancedStreamingMessageParser extends StreamingMessageParser {
   private _processedCodeBlocks = new Map<string, Set<string>>();
+  private _syntheticArtifactWraps = new Set<string>();
+  private _emittedOutput = new Map<string, number>();
   private _artifactCounter = 0;
 
   // Optimized command pattern lookup
@@ -33,14 +35,46 @@ export class EnhancedStreamingMessageParser extends StreamingMessageParser {
   }
 
   parse(messageId: string, input: string): string {
+    const rawInput = input;
+
+    // Models (e.g. qwen3:4b-64k) emit bare <boltAction> tags without the
+    // <boltArtifact> wrapper, so onArtifactOpen never fires and the workbench
+    // never mounts. The base parser is a stateful cumulative scanner: callers
+    // (useMessageParser) feed accumulated text and append whatever we return.
+    // Therefore the wrapper must be injected AHEAD of the parser cursor and the
+    // already-emitted output suppressed, otherwise the injection shifts the
+    // buffer under the cursor (callbacks never fire) or duplicates chat text.
+    // Injecting right before the first <boltAction keeps the output prefix
+    // byte-identical, so slicing off previously-returned length is exact.
+    // ponytail: a model that emits a real <boltArtifact> AFTER a bare
+    // <boltAction> would double-open; sticky per message, fix only if observed.
+    if (!this._syntheticArtifactWraps.has(messageId) && !rawInput.includes('<boltArtifact') && rawInput.includes('<boltAction')) {
+      this._syntheticArtifactWraps.add(messageId);
+    }
+
+    if (this._syntheticArtifactWraps.has(messageId)) {
+      const injectAt = rawInput.indexOf('<boltAction');
+      const wrapper = `<boltArtifact id="auto-${messageId}" title="Generated App" type="bundled">\n`;
+      input = injectAt === -1 ? rawInput : rawInput.slice(0, injectAt) + wrapper + rawInput.slice(injectAt);
+    }
+
     // First try the normal parsing
     let output = super.parse(messageId, input);
 
-    // If no artifacts were detected, check for code blocks that should be files
-    if (!this._hasDetectedArtifacts(input)) {
-      const enhancedInput = this._detectAndWrapCodeBlocks(messageId, input);
+    // Suppress output already handed to the caller on earlier cumulative calls
+    // (only the synthetic-wrapper path re-renders previously emitted text).
+    if (this._syntheticArtifactWraps.has(messageId)) {
+      const emitted = Math.min(this._emittedOutput.get(messageId) ?? 0, output.length);
+      output = output.slice(emitted);
+    }
 
-      if (enhancedInput !== input) {
+    this._emittedOutput.set(messageId, (this._emittedOutput.get(messageId) ?? 0) + output.length);
+
+    // If no artifacts were detected, check for code blocks that should be files
+    if (!rawInput.includes('<boltArtifact')) {
+      const enhancedInput = this._detectAndWrapCodeBlocks(messageId, rawInput);
+
+      if (enhancedInput !== rawInput) {
         // Reset and reparse with enhanced input
         this.reset();
         output = super.parse(messageId, enhancedInput);
@@ -522,6 +556,8 @@ ${content.trim()}
   reset() {
     super.reset();
     this._processedCodeBlocks.clear();
+    this._syntheticArtifactWraps.clear();
+    this._emittedOutput.clear();
     this._artifactCounter = 0;
   }
 }

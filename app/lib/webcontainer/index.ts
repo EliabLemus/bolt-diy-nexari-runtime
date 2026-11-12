@@ -1,10 +1,20 @@
-import { WebContainer } from '@webcontainer/api';
-import { WORK_DIR_NAME } from '~/utils/constants';
-import { cleanStackTrace } from '~/utils/stacktrace';
+import type { WebContainer } from '@webcontainer/api';
+import { createBrowserRuntime } from '~/lib/runtime/browser-runtime';
+import { configuredRuntimeBackend, type RuntimeBackend } from '~/lib/runtime/runtime-selector';
 
 interface WebContainerContext {
   loaded: boolean;
+  backend?: RuntimeBackend;
 }
+
+/*
+ * Module-scope selector input. Recomputed once per module evaluation; under
+ * HMR this module re-evaluates wholesale (no hot.accept), so importers always
+ * observe the backend matching the boot they receive. Never derive selection
+ * from webcontainerContext.backend: it is a cache tag that stays undefined
+ * until boot completes.
+ */
+export const runtimeBackend = configuredRuntimeBackend();
 
 export const webcontainerContext: WebContainerContext = import.meta.hot?.data.webcontainerContext ?? {
   loaded: false,
@@ -19,42 +29,37 @@ export let webcontainer: Promise<WebContainer> = new Promise(() => {
 });
 
 if (!import.meta.env.SSR) {
+  const cachedRuntime =
+    import.meta.hot?.data.webcontainerContext?.backend === runtimeBackend
+      ? import.meta.hot.data.webcontainer
+      : undefined;
+
+  if (!cachedRuntime) {
+    /*
+     * A backend change or failed prior boot cannot retain readiness from the
+     * previous runtime. Consumers must observe the pending/new runtime instead.
+     */
+    webcontainerContext.loaded = false;
+    webcontainerContext.backend = undefined;
+  }
+
   webcontainer =
-    import.meta.hot?.data.webcontainer ??
+    cachedRuntime ??
     Promise.resolve()
-      .then(() => {
-        return WebContainer.boot({
-          coep: 'credentialless',
-          workdirName: WORK_DIR_NAME,
-          forwardPreviewErrors: true, // Enable error forwarding from iframes
-        });
-      })
+      .then(() => createBrowserRuntime(runtimeBackend))
       .then(async (webcontainer) => {
         webcontainerContext.loaded = true;
+        webcontainerContext.backend = runtimeBackend;
 
-        const { workbenchStore } = await import('~/lib/stores/workbench');
-
-        const response = await fetch('/inspector-script.js');
-        const inspectorScript = await response.text();
-        await webcontainer.setPreviewScript(inspectorScript);
-
-        // Listen for preview errors
-        webcontainer.on('preview-message', (message) => {
-          console.log('WebContainer preview message:', message);
-
-          // Handle both uncaught exceptions and unhandled promise rejections
-          if (message.type === 'PREVIEW_UNCAUGHT_EXCEPTION' || message.type === 'PREVIEW_UNHANDLED_REJECTION') {
-            const isPromise = message.type === 'PREVIEW_UNHANDLED_REJECTION';
-            const title = isPromise ? 'Unhandled Promise Rejection' : 'Uncaught Exception';
-            workbenchStore.actionAlert.set({
-              type: 'preview',
-              title,
-              description: 'message' in message ? message.message : 'Unknown error',
-              content: `Error occurred at ${message.pathname}${message.search}${message.hash}\nPort: ${message.port}\n\nStack trace:\n${cleanStackTrace(message.stack || '')}`,
-              source: 'preview',
-            });
-          }
-        });
+        /*
+         * Preview script injection and preview error events are StackBlitz
+         * capabilities. The nexari facade rejects them, so the nexari path
+         * skips this wiring entirely instead of failing boot on a refusal.
+         */
+        if (runtimeBackend === 'stackblitz') {
+          const { wireStackblitzPreview } = await import('./preview-wiring');
+          await wireStackblitzPreview(webcontainer);
+        }
 
         return webcontainer;
       });
