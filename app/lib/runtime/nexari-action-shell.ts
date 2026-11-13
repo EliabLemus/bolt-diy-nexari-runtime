@@ -403,11 +403,43 @@ export function createNexariActionShell(runtime: NexariBrowserRuntime, write?: (
 
         echo(`\n$ ${step}\n`);
 
-        const result = await runtime.runActionCommand(step, signal);
+        /*
+         * Install steps stream: each chunk echoes to the xterm as it arrives,
+         * so a >10s npm install shows live progress instead of silence until
+         * exit. The aggregated result keeps the merged stdout+stderr contract.
+         */
+        let stepStdout = '';
+        let stepStderr = '';
 
-        output += result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout;
+        const result = await runtime.runActionCommandStreaming(step, signal, (chunk, stream) => {
+          if (stream === 'stdout') {
+            stepStdout += chunk;
+          } else {
+            stepStderr += chunk;
+          }
 
-        echo(result.stderr.length > 0 ? `${result.stdout}\n${result.stderr}` : result.stdout);
+          echo(chunk);
+        });
+
+        const stepOutput = stepStderr.length > 0 ? `${stepStdout}\n${stepStderr}` : stepStdout;
+
+        /*
+         * Fallback: a runtime that resolved without delivering chunks still
+         * surfaces its aggregated output in the terminal, contract-compatible
+         * with the pre-streaming behavior.
+         */
+        const fallbackOutput =
+          stepOutput.length === 0 && (result.stdout.length > 0 || result.stderr.length > 0)
+            ? result.stderr.length > 0
+              ? `${result.stdout}\n${result.stderr}`
+              : result.stdout
+            : stepOutput;
+
+        output += fallbackOutput;
+
+        if (fallbackOutput !== stepOutput) {
+          echo(fallbackOutput);
+        }
 
         if (result.exitCode !== 0) {
           output += `\n[wasm-safe] step failed with exit code ${result.exitCode}; stopping the pipeline.`;

@@ -93,6 +93,11 @@ export interface NexariBrowserRuntime {
   boot(): Promise<void>;
   spawn(command: string, args?: string[], options?: NexariSpawnOptions): Promise<NexariBrowserProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
+  runActionCommandStreaming(
+    command: string,
+    signal: AbortSignal | undefined,
+    onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+  ): Promise<NexariActionCommandResult>;
   on(event: 'server-ready', callback: (port: number, url: string) => void): () => void;
   on(event: 'port', callback: (port: number, kind: 'open' | 'close', url: string) => void): () => void;
 
@@ -362,6 +367,8 @@ export function createNexariBrowserRuntime(runtime: NexariRuntime): NexariBrowse
     },
     teardown: () => runtime.teardown(),
     runActionCommand: (command, signal) => runtime.runActionCommand(command, signal),
+    runActionCommandStreaming: (command, signal, onChunk) =>
+      runtime.runActionCommandStreaming(command, signal, onChunk),
 
     async spawn(command, args, options) {
       rejectSpawnOptions(options);

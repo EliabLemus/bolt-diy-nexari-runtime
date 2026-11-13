@@ -5,6 +5,23 @@ import { createNexariBrowserRuntime, type NexariBrowserRuntime } from './nexari-
 
 function createRuntime(result: { stdout: string; stderr: string; exitCode: number }) {
   const runActionCommand = vi.fn().mockResolvedValue(result);
+  const runActionCommandStreaming = vi.fn().mockImplementation(
+    async (
+      _command: string,
+      _signal: AbortSignal | undefined,
+      onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+    ) => {
+      if (result.stdout.length > 0) {
+        onChunk(result.stdout, 'stdout');
+      }
+
+      if (result.stderr.length > 0) {
+        onChunk(result.stderr, 'stderr');
+      }
+
+      return result;
+    },
+  );
   const runtime = {
     state: 'ready',
     workdir: '/project',
@@ -12,13 +29,17 @@ function createRuntime(result: { stdout: string; stderr: string; exitCode: numbe
     boot: vi.fn(),
     spawn: vi.fn(),
     runActionCommand,
+    runActionCommandStreaming,
     on: vi.fn(),
     setPreviewScript: vi.fn(),
     internal: { watchPaths: vi.fn() },
     teardown: vi.fn(),
-  } as unknown as NexariBrowserRuntime & { runActionCommand: ReturnType<typeof vi.fn> };
+  } as unknown as NexariBrowserRuntime & {
+    runActionCommand: ReturnType<typeof vi.fn>;
+    runActionCommandStreaming: ReturnType<typeof vi.fn>;
+  };
 
-  return { runtime, runActionCommand };
+  return { runtime, runActionCommand, runActionCommandStreaming };
 }
 
 describe('createNexariActionShell', () => {
@@ -192,7 +213,7 @@ describe('rewriteWasmSafeCommand', () => {
 
 describe('createNexariActionShell wasm-safe rewriting', () => {
   it('never sends a project command raw: the rewritten pipeline runs step by step', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 
     /*
      * The final dev step runs detached: the spawn lane hosts the never-exiting
@@ -228,7 +249,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const shell = createNexariActionShell(runtime);
     const { exitCode } = (await shell.executeCommand('session-1', 'npm install && npm run dev'))!;
 
-    const commands = runActionCommand.mock.calls.map(([command]) => command);
+    const commands = runActionCommandStreaming.mock.calls.map(([command]) => command);
     expect(commands).not.toContain('npm install && npm run dev');
     expect(commands[0]).toBe('npm install --ignore-scripts --prefer-offline --no-audit --no-fund');
     expect(commands[1]).toBe('npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
@@ -341,7 +362,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
   });
 
   it('shows the executed pipeline in the terminal output, not the original command', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: 'ok', stderr: '', exitCode: 0 });
 
     const shell = createNexariActionShell(runtime);
     const { output } = (await shell.executeCommand('session-1', 'pnpm install'))!;
@@ -350,12 +371,12 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     expect(output).toContain('esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).toContain('$ npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).not.toContain('pnpm install\n');
-    expect(runActionCommand).toHaveBeenCalledTimes(4);
+    expect(runActionCommandStreaming).toHaveBeenCalledTimes(4);
   });
 
   it('stops at the first failing step and returns that step exit code', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
-    (runActionCommand as ReturnType<typeof vi.fn>)
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+    (runActionCommandStreaming as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 })
       .mockResolvedValueOnce({ stdout: '', stderr: 'boom', exitCode: 37 });
 
@@ -364,11 +385,11 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     expect(result.output).toContain('boom');
     expect(result.output).toContain('step failed with exit code 37');
     expect(result.exitCode).toBe(37);
-    expect(runActionCommand).toHaveBeenCalledTimes(2);
+    expect(runActionCommandStreaming).toHaveBeenCalledTimes(2);
   });
 
   it('captures a crash after the ready line in the result (death output + real exit code)', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
 
     /*
      * The live failure shape: vite prints its ready banner, then dies at the
@@ -396,11 +417,11 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain('Local: http://localhost:5173/');
     expect(result.output).toContain('could not be executed');
-    expect(runActionCommand).toHaveBeenCalledTimes(4);
+    expect(runActionCommandStreaming).toHaveBeenCalledTimes(4);
   });
 
   it('propagates the caller abort signal to every pipeline step', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
     const controller = new AbortController();
 
     /*
@@ -426,7 +447,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const shell = createNexariActionShell(runtime);
     await shell.executeCommand('session-1', 'npm run dev', undefined, controller.signal);
 
-    for (const call of runActionCommand.mock.calls) {
+    for (const call of runActionCommandStreaming.mock.calls) {
       expect(call[1]).toBe(controller.signal);
     }
     expect(runtime.spawn).toHaveBeenCalledWith(
@@ -437,7 +458,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
   });
 
   it('refuses to start a pipeline step after the signal is already aborted', async () => {
-    const { runtime, runActionCommand } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
     const controller = new AbortController();
     controller.abort();
 
@@ -445,7 +466,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     await expect(shell.executeCommand('session-1', 'npm run dev', undefined, controller.signal)).rejects.toThrow(
       'Nexari action command aborted.',
     );
-    expect(runActionCommand).not.toHaveBeenCalled();
+    expect(runActionCommandStreaming).not.toHaveBeenCalled();
   });
 
   it('leaves non-project commands untouched on the raw lane', async () => {
@@ -548,5 +569,45 @@ describe('regression: artifact shell action on a guest with a late event lane', 
       'sh -c npm run dev',
     ]);
     expect(serverReadyEvents.length).toBeGreaterThan(0);
+  });
+
+  it('echoes install chunks to the terminal DURING execution, not after the step resolves', async () => {
+    const { runtime, runActionCommandStreaming } = createRuntime({ stdout: '', stderr: '', exitCode: 0 });
+
+    const chunkTimes: number[] = [];
+    let resolved = false;
+    let release: (() => void) | undefined;
+
+    (runActionCommandStreaming as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _command: string,
+        _signal: AbortSignal | undefined,
+        onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+      ) => {
+        onChunk('adding 42 packages', 'stdout');
+
+        await new Promise<void>((resolve) => (release = resolve));
+
+        return { stdout: 'adding 42 packages', stderr: '', exitCode: 0 };
+      },
+    );
+
+    const shell = createNexariActionShell(runtime, (chunk) => {
+      if (chunk.includes('adding 42 packages')) {
+        chunkTimes.push(resolved ? 1 : 0);
+      }
+    });
+
+    const pending = shell.executeCommand('session-1', 'npm install lodash');
+    void pending.then(() => (resolved = true));
+
+    // Chunks arrive while the step is still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(chunkTimes).toEqual([0]);
+
+    release!();
+    await pending;
+    expect(resolved).toBe(true);
+    expect(chunkTimes).toEqual([0]); // no echo happened after resolution
   });
 });
