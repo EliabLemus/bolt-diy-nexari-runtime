@@ -62,6 +62,17 @@ function createFacadeFake(options?: { readdirHits?: string[] }) {
       };
     }),
     runActionCommand: vi.fn(async (command: string) => ({ stdout: `ran ${command}`, stderr: '', exitCode: 0 })),
+    runActionCommandStreaming: vi.fn(
+      async (
+        command: string,
+        _signal: AbortSignal | undefined,
+        onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+      ) => {
+        onChunk(`ran ${command}`, 'stdout');
+
+        return { stdout: `ran ${command}`, stderr: '', exitCode: 0 };
+      },
+    ),
     on: (() => () => undefined) as unknown as NexariBrowserRuntime['on'],
     setPreviewScript: () => Promise.resolve(),
     internal: {
