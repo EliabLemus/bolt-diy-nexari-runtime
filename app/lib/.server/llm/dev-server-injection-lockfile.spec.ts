@@ -33,9 +33,7 @@ describe('lockfile action before install (A2)', () => {
     expect(lockIndex).toBeGreaterThan(-1);
     expect(shellIndex).toBeGreaterThan(lockIndex);
 
-    const lockBody = /<boltAction type="file" filePath="package-lock.json">([\s\S]*?)<\/boltAction>/.exec(
-      decoded,
-    )![1];
+    const lockBody = /<boltAction type="file" filePath="package-lock.json">([\s\S]*?)<\/boltAction>/.exec(decoded)![1];
 
     expect(JSON.parse(lockBody)).toMatchObject({ name: 'demo', version: '1.2.3', lockfileVersion: 3 });
   });
@@ -51,10 +49,14 @@ describe('lockfile action before install (A2)', () => {
 
   it('generates the lockfile when the model lockfile is unparsable or mismatched', () => {
     for (const lock of ['not json', '{"name":"other","version":"9.9.9"}']) {
-      const decoded = decode(devServerInjection(`${PKG_JSON}\n<boltAction type="file" filePath="package-lock.json">${lock}</boltAction>`)!);
+      const decoded = decode(
+        devServerInjection(`${PKG_JSON}\n<boltAction type="file" filePath="package-lock.json">${lock}</boltAction>`)!,
+      );
 
       expect(decoded).toContain('filePath="package-lock.json"');
-      expect(decoded.indexOf('filePath="package-lock.json"')).toBeLessThan(decoded.indexOf('<boltAction type="shell">'));
+      expect(decoded.indexOf('filePath="package-lock.json"')).toBeLessThan(
+        decoded.indexOf('<boltAction type="shell">'),
+      );
     }
   });
 
