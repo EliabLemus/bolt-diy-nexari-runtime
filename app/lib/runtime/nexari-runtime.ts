@@ -66,6 +66,11 @@ export interface NexariRuntime {
   boot(): Promise<void>;
   spawn(command: string, args?: string[], options?: NexariGuestSpawnOptions): Promise<NexariGuestProcess>;
   runActionCommand(command: string, signal?: AbortSignal): Promise<NexariActionCommandResult>;
+  runActionCommandStreaming(
+    command: string,
+    signal: AbortSignal | undefined,
+    onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+  ): Promise<NexariActionCommandResult>;
 
   /** Present only when the booted guest exposes a preview event lane. */
   readonly on?: NexariGuestEventLane;
@@ -219,6 +224,96 @@ class NexariRuntimeAdapter implements NexariRuntime {
     }
   }
 
+  async runActionCommandStreaming(
+    command: string,
+    signal: AbortSignal | undefined,
+    onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+  ): Promise<NexariActionCommandResult> {
+    this.#assertReady();
+
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
+
+    const spawnController = new AbortController();
+    let process: NexariGuestProcess | undefined;
+    let killed = false;
+    let stopStreaming: () => void = () => undefined;
+    let rejectCancellation!: (reason: unknown) => void;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const cancel = (reason: unknown) => {
+      if (!killed) {
+        killed = true;
+        spawnController.abort(reason);
+        process?.kill();
+      }
+
+      rejectCancellation(reason);
+      stopStreaming();
+    };
+    const abort = () => cancel(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    this.#activeActionCancels.add(cancel);
+
+    try {
+      if (signal?.aborted) {
+        cancel(signal.reason);
+      }
+
+      const spawnedProcess = this.#guest!.spawn('sh', ['-c', command], { signal: spawnController.signal }).then(
+        (lateProcess) => {
+          if (killed || this.#state !== 'ready') {
+            void lateProcess.exit.catch(() => undefined);
+            lateProcess.kill();
+          }
+
+          return lateProcess;
+        },
+      );
+      process = await Promise.race([spawnedProcess, cancellation]);
+
+      if (this.#state !== 'ready') {
+        cancel(new NexariRuntimeTerminatedError());
+      }
+
+      const readers: ReadableStreamDefaultReader<string>[] = [];
+      let streaming = true;
+      const guardedOnChunk: typeof onChunk = (chunk, streamName) => {
+        if (streaming) {
+          onChunk(chunk, streamName);
+        }
+      };
+      stopStreaming = () => {
+        streaming = false;
+
+        for (const reader of readers.splice(0)) {
+          void reader.cancel().catch(() => undefined);
+        }
+      };
+
+      const [stdout, stderr, exitCode] = await Promise.race([
+        Promise.all([
+          readEachChunk(process.stdout, 'stdout', guardedOnChunk, readers, () => !streaming),
+          readEachChunk(process.stderr, 'stderr', guardedOnChunk, readers, () => !streaming),
+          process.exit,
+        ]),
+        cancellation,
+      ]);
+      this.#assertReady();
+
+      if (signal?.aborted) {
+        throw signal.reason;
+      }
+
+      return { stdout, stderr, exitCode };
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.#activeActionCancels.delete(cancel);
+    }
+  }
+
   async teardown(): Promise<void> {
     if (this.#teardownPromise) {
       return this.#teardownPromise;
@@ -269,6 +364,45 @@ class NexariRuntimeAdapter implements NexariRuntime {
     if (this.#state === 'terminated') {
       throw new NexariRuntimeTerminatedError();
     }
+  }
+}
+
+async function readEachChunk(
+  stream: ReadableStream<string>,
+  streamName: 'stdout' | 'stderr',
+  onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+  readers: ReadableStreamDefaultReader<string>[],
+  isCancelled: () => boolean,
+): Promise<string> {
+  const reader = stream.getReader();
+  readers.push(reader);
+  let output = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read().catch((error: unknown) => {
+        /* Cancellation closes the reader; the race already rejected with the real reason. */
+        if (isCancelled()) {
+          return { done: true, value: '' };
+        }
+
+        throw error;
+      });
+
+      if (done) {
+        return output;
+      }
+
+      output += value;
+      onChunk(value, streamName);
+    }
+  } finally {
+    const index = readers.indexOf(reader);
+
+    if (index !== -1) {
+      readers.splice(index, 1);
+    }
+    reader.releaseLock();
   }
 }
 
