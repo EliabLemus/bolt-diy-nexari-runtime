@@ -9,7 +9,7 @@ import type { NexariBrowserRuntime } from './nexari-runtime-facade';
  * swapped for `@rollup/wasm-node`. Verified by hand: it boots a real Vite
  * dev server (`VITE ready`) on the guest.
  */
-const WASM_SAFE_INSTALL_STEP = 'npm install --ignore-scripts';
+const WASM_SAFE_INSTALL_STEP = 'npm install --ignore-scripts --prefer-offline --no-audit --no-fund';
 const WASM_SAFE_WASM_BUILDS_STEP = 'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node';
 const WASM_SAFE_ROLLUP_SWAP_STEP =
   `node -e "const fs=require('fs'); ` +

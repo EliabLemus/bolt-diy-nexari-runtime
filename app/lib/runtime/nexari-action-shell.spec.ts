@@ -109,7 +109,7 @@ describe('createNexariActionShell', () => {
 describe('rewriteWasmSafeCommand', () => {
   it('maps bare install to the full install pipeline (install + wasm builds + rollup swap + esbuild swap)', () => {
     expect(rewriteWasmSafeCommand('npm install')).toEqual([
-      'npm install --ignore-scripts',
+      'npm install --ignore-scripts --prefer-offline --no-audit --no-fund',
       'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
       expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
@@ -125,7 +125,7 @@ describe('rewriteWasmSafeCommand', () => {
   it('maps dev, build and preview to the full 5-step start pipeline (install + wasm builds + rollup swap + esbuild swap + npm run X)', () => {
     const pipeline = rewriteWasmSafeCommand('npm run dev');
     expect(pipeline).toEqual([
-      'npm install --ignore-scripts',
+      'npm install --ignore-scripts --prefer-offline --no-audit --no-fund',
       'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
       expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
@@ -148,7 +148,7 @@ describe('rewriteWasmSafeCommand', () => {
 
     // esbuild/@rollup/wasm-node are already brought by the wasm rebuild step.
     expect(rewriteWasmSafeCommand('npm install esbuild @rollup/wasm-node')).toEqual([
-      'npm install --ignore-scripts',
+      'npm install --ignore-scripts --prefer-offline --no-audit --no-fund',
       'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
       expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
@@ -230,7 +230,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
 
     const commands = runActionCommand.mock.calls.map(([command]) => command);
     expect(commands).not.toContain('npm install && npm run dev');
-    expect(commands[0]).toBe('npm install --ignore-scripts');
+    expect(commands[0]).toBe('npm install --ignore-scripts --prefer-offline --no-audit --no-fund');
     expect(commands[1]).toBe('npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(commands.some((command) => command.includes('fs.cpSync'))).toBe(true);
 
@@ -346,7 +346,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const shell = createNexariActionShell(runtime);
     const { output } = (await shell.executeCommand('session-1', 'pnpm install'))!;
 
-    expect(output).toContain('npm install --ignore-scripts');
+    expect(output).toContain('npm install --ignore-scripts --prefer-offline --no-audit --no-fund');
     expect(output).toContain('esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).toContain('$ npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).not.toContain('pnpm install\n');
@@ -541,7 +541,7 @@ describe('regression: artifact shell action on a guest with a late event lane', 
 
     expect(exitCode).toBe(0);
     expect(executed).toEqual([
-      'sh -c npm install --ignore-scripts',
+      'sh -c npm install --ignore-scripts --prefer-offline --no-audit --no-fund',
       'sh -c npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
       expect.stringContaining('fs.cpSync'),
       expect.stringContaining('fs.cpSync'),
