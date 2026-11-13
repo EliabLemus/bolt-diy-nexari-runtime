@@ -173,9 +173,40 @@ describe('createVivariGuestFactory', () => {
     expect(guestSpawn).toHaveBeenCalledWith(
       'sh',
       ['-c', 'echo hi'],
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ cwd: '/', signal: expect.any(AbortSignal) }),
     );
     expect(result).toEqual({ stdout: 'out\n', stderr: 'err\n', exitCode: 3 });
+  });
+
+  it('regression: npm install exits 0 because the action lane spawns at the fs root, not the vivari demo cwd', async () => {
+    const { guestSpawn, factory } = createVivariHarness();
+    const runtime = await factory();
+    await runtime.boot();
+
+    /*
+     * The vivari kernel defaults an unpinned spawn cwd to the last scaffolded
+     * demo dir (`defaultTermCwd()` → e.g. `/react-app`). Simulate npm: it
+     * exits 1 immediately when package.json is not in its cwd — only the
+     * pinned root cwd carries the project files the surface writes at `/`.
+     */
+    guestSpawn.mockImplementation(
+      async (_command: string, _args: string[] | undefined, options?: { cwd?: string; signal?: AbortSignal }) => {
+        if (options?.cwd !== '/') {
+          return fakeVivariProcess({ stderr: 'npm error ENOENT: no such file package.json\n', exitCode: 1 });
+        }
+
+        return fakeVivariProcess({ stdout: 'added 1 package\n', exitCode: 0 });
+      },
+    );
+
+    const result = await runtime.runActionCommand('npm install');
+
+    expect(guestSpawn).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'npm install'],
+      expect.objectContaining({ cwd: '/' }),
+    );
+    expect(result).toEqual({ stdout: 'added 1 package\n', stderr: '', exitCode: 0 });
   });
 
   it('bridges vivari processes to the guest process shape with delegated kill', async () => {
@@ -189,6 +220,7 @@ describe('createVivariGuestFactory', () => {
     const spawned = await runtime.spawn('node', ['--version'], { signal: new AbortController().signal });
 
     expect(guestSpawn).toHaveBeenCalledWith('node', ['--version'], {
+      cwd: '/',
       signal: expect.any(AbortSignal),
     });
 

@@ -21,7 +21,7 @@ export interface VivariGuestRuntimeLike {
     mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
     rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   };
-  spawn(command: string, args?: string[], options?: { signal?: AbortSignal }): Promise<VivariGuestProcessLike>;
+  spawn(command: string, args?: string[], options?: { cwd?: string; signal?: AbortSignal }): Promise<VivariGuestProcessLike>;
   teardown(): void | Promise<void>;
 
   /**
@@ -101,7 +101,17 @@ function adaptVivariGuest(guest: VivariGuestRuntimeLike): NexariGuestRuntime {
   return {
     fs,
     spawn: (command, args, options) =>
-      guest.spawn(command, args, options ? { signal: options.signal } : undefined).then(adaptVivariProcess),
+      /*
+       * Pin the spawn cwd to the guest VFS root: the files store, file actions,
+       * and history writes all land at `/` (toGuestPath maps WORK_DIR → root),
+       * but the vivari kernel's default spawn cwd is the last scaffolded demo
+       * dir (`defaultTermCwd()` → e.g. `/react-app`), so an unpinned
+       * `sh -c "npm install"` runs against the demo tree and never sees the
+       * project's package.json.
+       */
+      guest
+        .spawn(command, args, { cwd: '/', ...(options ? { signal: options.signal } : {}) })
+        .then(adaptVivariProcess),
     teardown: () => Promise.resolve(guest.teardown()),
     ...(guest.on
       ? {
