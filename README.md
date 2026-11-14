@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-22.x-green)
 
-Nexari es un IDE de desarrollo en el navegador que **genera y corre proyectos 100% en local**: el LLM (Ollama con un modelo local) escribe el código y el proyecto se ejecuta en un runtime WebAssembly en tu propia máquina — sin StackBlitz, sin nube, sin API keys de terceros.
+Nexari es un IDE de desarrollo en el navegador que **genera y corre proyectos en tu máquina**: el LLM escribe el código y el proyecto se ejecuta en un runtime WebAssembly local — el modelo puede ser local (Ollama) o remoto (OpenRouter u otro proveedor con API key).
 
 ## Qué hace
 
@@ -15,16 +15,16 @@ Nexari es un IDE de desarrollo en el navegador que **genera y corre proyectos 10
 
 - Node 22
 - [pnpm](https://pnpm.io)
-- [Ollama](https://ollama.com) con un modelo local instalado (ej. `ollama pull qwen2.5-coder`)
+- Un LLM: [Ollama](https://ollama.com) local (ej. `ollama pull qwen2.5-coder`) **o** una API key de proveedor (ej. `OPEN_ROUTER_API_KEY` en `.env.local`)
 
 ## Cómo correrlo
 
 ```bash
 pnpm install
-VITE_RUNTIME_BACKEND=nexari pnpm run dev
+pnpm run dev
 ```
 
-Abre `http://localhost:5173`, elige tu modelo local de Ollama y escribe tu primer prompt.
+Abre `http://localhost:5173`, elige tu modelo en la UI y escribe tu primer prompt. El backend de ejecución por defecto es **Nexari** (runtime WebAssembly local); `VITE_RUNTIME_BACKEND` solo se necesita para optar explícitamente por otro backend (`nexari` | `stackblitz`).
 
 ## Scripts útiles
 
