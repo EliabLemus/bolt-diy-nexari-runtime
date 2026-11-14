@@ -108,8 +108,25 @@ export function devServerInjection(content: string): string | null {
     return null;
   }
 
-  const modelLock = modelLockfile(content);
-  const generated = modelLock === null ? generateGuestLockfile(extractFileAction(content, 'package.json')) : null;
+  const hasPackageJson = extractFileAction(content, 'package.json') !== null;
+  const hasDevScript = hasPackageJson && /"dev"\s*:/.test(extractFileAction(content, 'package.json')!);
+
+  /*
+   * Plain-HTML projects (no package.json) cannot run npm at all: the npm
+   * step exits 1 and the preview stays on "No preview available". Serve
+   * them statically with the guest's python3 (zero deps, no network).
+   * ponytail: guest python3 is verified present in the runtime image.
+   */
+  const command = !hasPackageJson
+    ? 'python3 -m http.server 5173 --bind 0.0.0.0'
+    : hasDevScript
+      ? 'npm install && npm run dev -- --host 0.0.0.0 --port 5173'
+      : 'npm install && npx --yes serve -l 5173 .';
+
+  const npmPath = hasPackageJson;
+  const modelLock = npmPath ? modelLockfile(content) : null;
+  const generated =
+    npmPath && modelLock === null ? generateGuestLockfile(extractFileAction(content, 'package.json')) : null;
 
   const lockfileAction =
     generated === null ? '' : `<boltAction type="file" filePath="package-lock.json">${generated}</boltAction>\n`;
@@ -117,7 +134,7 @@ export function devServerInjection(content: string): string | null {
   const injectedText =
     '\n\n<boltArtifact id="dev-server-autostart" title="Start Dev Server" type="run">\n' +
     lockfileAction +
-    '<boltAction type="shell">npm install && npm run dev -- --host 0.0.0.0 --port 5173</boltAction>\n' +
+    `<boltAction type="shell">${command}</boltAction>\n` +
     '</boltArtifact>\n';
 
   return `0:${JSON.stringify(injectedText)}\n`;
