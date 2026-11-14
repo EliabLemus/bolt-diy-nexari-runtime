@@ -620,7 +620,9 @@ describe('static server commands (injected dev-server step)', () => {
     let spawnCount = 0;
     const spawnImpl = async (_cmd: string, _args: string[], _opts?: unknown) => {
       spawnCount += 1;
+
       const id = `proc-${spawnCount}`;
+
       return {
         output: new ReadableStream({
           start(controller) {
@@ -659,6 +661,7 @@ describe('static server commands (injected dev-server step)', () => {
 
     const second = await shell.executeCommand('s2', 'python3 -m http.server 5173 --bind 0.0.0.0');
     expect(second?.exitCode).toBe(0);
+
     // The stale server from the first chat was killed before the new bind.
     expect(killed).toEqual(['proc-1']);
   });

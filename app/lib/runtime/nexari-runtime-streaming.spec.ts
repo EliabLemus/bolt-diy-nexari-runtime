@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  createNexariRuntime,
-  type NexariGuestRuntime,
-  type NexariGuestProcess,
-} from './nexari-runtime';
+import { createNexariRuntime, type NexariGuestRuntime, type NexariGuestProcess } from './nexari-runtime';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -27,6 +23,7 @@ function manualStream(): { stream: ReadableStream<string>; push(chunk: string): 
 
   return {
     stream,
+
     // ponytail: enqueue after cancel/kill throws — a killed guest cannot write.
     push: (chunk) => {
       try {
@@ -53,10 +50,12 @@ function createGuest(seeds: { stdout?: string; stderr?: string } = {}) {
     out.push(seeds.stdout);
     out.close();
   }
+
   if (seeds.stderr !== undefined) {
     err.push(seeds.stderr);
     err.close();
   }
+
   const process: NexariGuestProcess = {
     input: new WritableStream<string>(),
     stdout: out.stream,
@@ -145,8 +144,10 @@ describe('runActionCommandStreaming', () => {
 
   it('aggregates the same result as runActionCommand', async () => {
     const { guest } = createGuest();
+
     // Streams are single-use: each spawn gets a fresh process.
     vi.mocked(guest.spawn).mockImplementation(async () => createGuest({ stdout: 'stdout', stderr: 'stderr' }).process);
+
     const runtime = createNexariRuntime({ boot: vi.fn().mockResolvedValue(guest) });
     await runtime.boot();
 

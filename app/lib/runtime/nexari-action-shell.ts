@@ -277,6 +277,7 @@ function runServerStep(
       try {
         const process = await runtime.spawn('sh', ['-c', step], { signal });
         onProcess?.(process);
+
         const reader = process.output.getReader();
         let output = '';
         let exitedCode: number | undefined;

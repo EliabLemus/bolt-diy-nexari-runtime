@@ -201,11 +201,7 @@ describe('createVivariGuestFactory', () => {
 
     const result = await runtime.runActionCommand('npm install');
 
-    expect(guestSpawn).toHaveBeenCalledWith(
-      'sh',
-      ['-c', 'npm install'],
-      expect.objectContaining({ cwd: '/' }),
-    );
+    expect(guestSpawn).toHaveBeenCalledWith('sh', ['-c', 'npm install'], expect.objectContaining({ cwd: '/' }));
     expect(result).toEqual({ stdout: 'added 1 package\n', stderr: '', exitCode: 0 });
   });
 

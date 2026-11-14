@@ -285,6 +285,7 @@ class NexariRuntimeAdapter implements NexariRuntime {
           onChunk(chunk, streamName);
         }
       };
+
       stopStreaming = () => {
         streaming = false;
 
@@ -376,6 +377,7 @@ async function readEachChunk(
 ): Promise<string> {
   const reader = stream.getReader();
   readers.push(reader);
+
   let output = '';
 
   try {
@@ -402,6 +404,7 @@ async function readEachChunk(
     if (index !== -1) {
       readers.splice(index, 1);
     }
+
     reader.releaseLock();
   }
 }
