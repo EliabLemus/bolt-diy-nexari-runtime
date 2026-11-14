@@ -653,17 +653,12 @@ describe('static server commands (injected dev-server step)', () => {
   it('runs a static server detached and kills the previous instance first', { timeout: 15_000 }, async () => {
     const { runtime, killed } = createSpawnRuntime();
 
-    const first = await createNexariActionShell(runtime).executeCommand(
-      's1',
-      'python3 -m http.server 5173 --bind 0.0.0.0',
-    );
-    expect(first.exitCode).toBe(0);
+    const shell = createNexariActionShell(runtime);
+    const first = await shell.executeCommand('s1', 'python3 -m http.server 5173 --bind 0.0.0.0');
+    expect(first?.exitCode).toBe(0);
 
-    const second = await createNexariActionShell(runtime).executeCommand(
-      's2',
-      'python3 -m http.server 5173 --bind 0.0.0.0',
-    );
-    expect(second.exitCode).toBe(0);
+    const second = await shell.executeCommand('s2', 'python3 -m http.server 5173 --bind 0.0.0.0');
+    expect(second?.exitCode).toBe(0);
     // The stale server from the first chat was killed before the new bind.
     expect(killed).toEqual(['proc-1']);
   });
