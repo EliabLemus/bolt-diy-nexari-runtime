@@ -5,23 +5,25 @@ import { createNexariBrowserRuntime, type NexariBrowserRuntime } from './nexari-
 
 function createRuntime(result: { stdout: string; stderr: string; exitCode: number }) {
   const runActionCommand = vi.fn().mockResolvedValue(result);
-  const runActionCommandStreaming = vi.fn().mockImplementation(
-    async (
-      _command: string,
-      _signal: AbortSignal | undefined,
-      onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
-    ) => {
-      if (result.stdout.length > 0) {
-        onChunk(result.stdout, 'stdout');
-      }
+  const runActionCommandStreaming = vi
+    .fn()
+    .mockImplementation(
+      async (
+        _command: string,
+        _signal: AbortSignal | undefined,
+        onChunk: (chunk: string, stream: 'stdout' | 'stderr') => void,
+      ) => {
+        if (result.stdout.length > 0) {
+          onChunk(result.stdout, 'stdout');
+        }
 
-      if (result.stderr.length > 0) {
-        onChunk(result.stderr, 'stderr');
-      }
+        if (result.stderr.length > 0) {
+          onChunk(result.stderr, 'stderr');
+        }
 
-      return result;
-    },
-  );
+        return result;
+      },
+    );
   const runtime = {
     state: 'ready',
     workdir: '/project',
@@ -609,5 +611,60 @@ describe('regression: artifact shell action on a guest with a late event lane', 
     await pending;
     expect(resolved).toBe(true);
     expect(chunkTimes).toEqual([0]); // no echo happened after resolution
+  });
+});
+
+describe('static server commands (injected dev-server step)', () => {
+  function createSpawnRuntime() {
+    const killed: string[] = [];
+    let spawnCount = 0;
+    const spawnImpl = async (_cmd: string, _args: string[], _opts?: unknown) => {
+      spawnCount += 1;
+      const id = `proc-${spawnCount}`;
+      return {
+        output: new ReadableStream({
+          start(controller) {
+            controller.enqueue('server listening on 0.0.0.0:5173');
+          },
+        }),
+        exit: new Promise<number>(() => undefined), // long-running server
+        kill: () => {
+          killed.push(id);
+        },
+      };
+    };
+    const runtime = {
+      state: 'ready',
+      workdir: '/project',
+      fs: {},
+      boot: vi.fn(),
+      spawn: vi.fn().mockImplementation(spawnImpl),
+      runActionCommand: vi.fn(),
+      runActionCommandStreaming: vi.fn(),
+      on: vi.fn(),
+      setPreviewScript: vi.fn(),
+      internal: { watchPaths: vi.fn() },
+      teardown: vi.fn(),
+    } as unknown as NexariBrowserRuntime;
+
+    return { runtime, killed };
+  }
+
+  it('runs a static server detached and kills the previous instance first', { timeout: 15_000 }, async () => {
+    const { runtime, killed } = createSpawnRuntime();
+
+    const first = await createNexariActionShell(runtime).executeCommand(
+      's1',
+      'python3 -m http.server 5173 --bind 0.0.0.0',
+    );
+    expect(first.exitCode).toBe(0);
+
+    const second = await createNexariActionShell(runtime).executeCommand(
+      's2',
+      'python3 -m http.server 5173 --bind 0.0.0.0',
+    );
+    expect(second.exitCode).toBe(0);
+    // The stale server from the first chat was killed before the new bind.
+    expect(killed).toEqual(['proc-1']);
   });
 });

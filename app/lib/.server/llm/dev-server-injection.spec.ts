@@ -32,10 +32,6 @@ describe('devServerInjection', () => {
     const decoded = JSON.parse(payload!.slice('0:'.length).trim()) as string;
 
     expect(decoded).toContain('python3 -m http.server 5173');
-    // Shared guest fs: a previous chat's server keeps 5173 bound — the
-    // injected command must reboot it via the pidfile before binding.
-    expect(decoded).toContain('/tmp/.nexari-dev.pid');
-    expect(decoded).toContain('kill -9');
     expect(decoded).not.toContain('npm install');
     expect(decoded).not.toContain('package-lock.json');
   });

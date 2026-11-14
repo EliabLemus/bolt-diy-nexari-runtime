@@ -162,6 +162,18 @@ const SERVER_OUTPUT_READY_PATTERN =
   /(local:|ready in|listening|server running|started server|https?:\/\/[^\s]+\.\S+:\d+)/i;
 const SERVER_STEP_TIMEOUT_MS = 30_000;
 
+/*
+ * The guest fs is SHARED across chats: a static server from a previous chat
+ * keeps its port bound, so the new server exits EADDRINUSE and the preview
+ * serves stale content forever. The guest shell has no job control (no `&`,
+ * `$!`, pidfiles), so the previous detached server handle is tracked here at
+ * module level (the shell factory is re-created per command) and killed
+ * before a replacement starts.
+ * ponytail: one handle per browser; per-port registry only if multi-port
+ * previews ever ship.
+ */
+let lastStaticServer: { kill(): void } | undefined;
+
 /**
  * A server that prints a ready line and dies moments later (wasm guest: the
  * native esbuild binary failing at the first transform) must not be reported
@@ -182,6 +194,7 @@ function runServerStep(
   step: string,
   signal?: AbortSignal,
   write?: (chunk: string) => void,
+  onProcess?: (process: { kill(): void }) => void,
 ): Promise<ServerStepResult> {
   const echo = write ?? (() => undefined);
 
@@ -263,6 +276,7 @@ function runServerStep(
     void (async () => {
       try {
         const process = await runtime.spawn('sh', ['-c', step], { signal });
+        onProcess?.(process);
         const reader = process.output.getReader();
         let output = '';
         let exitedCode: number | undefined;
@@ -365,6 +379,29 @@ export function createNexariActionShell(runtime: NexariBrowserRuntime, write?: (
       await this.assertRunnable();
 
       const steps = rewriteWasmSafeCommand(command);
+
+      if (steps === null && /(-m http\.server|serve -l 5173|http-server)/.test(normalize(command))) {
+        /*
+         * Raw static-server command (injected dev-server step): it is
+         * long-running, so it must run detached like a server step — joining
+         * its exit would hang the action lane forever — and the previous
+         * instance must die first or the port stays stale-bound.
+         */
+        echo(`\n$ ${command}\n`);
+
+        lastStaticServer?.kill();
+        lastStaticServer = undefined;
+
+        const result = await runServerStep(runtime, command, signal, echo, (process) => {
+          lastStaticServer = process;
+        });
+
+        const serverOutput = result.output.length > 0 ? result.output : '[server] serving';
+
+        echo(`\n${serverOutput}\n`);
+
+        return { output: serverOutput, exitCode: result.exitCode };
+      }
 
       if (steps === null) {
         echo(`\n$ ${command}\n`);
