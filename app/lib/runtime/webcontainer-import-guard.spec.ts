@@ -39,13 +39,7 @@ const VIOLATION_KINDS: readonly SdkReferenceKind[] = ['value-import', 'value-ree
 /**
  * Known-accepted SDK surface this slice deliberately keeps.
  */
-const ALLOWED_VALUE_REFERENCES: Record<string, readonly SdkReferenceKind[]> = {
-  /*
-   * Dead upstream auth shim (nothing imports it). Pinned to its exact known
-   * state by a dedicated assertion below; any additional reference fails.
-   */
-  'lib/webcontainer/auth.client.ts': ['value-reexport'],
-};
+const ALLOWED_VALUE_REFERENCES: Record<string, readonly SdkReferenceKind[]> = {};
 
 /** The stackblitz boot factory is the sole sanctioned lazy SDK import. */
 const ALLOWED_DYNAMIC_IMPORT_FILES: readonly string[] = ['lib/runtime/browser-runtime.ts'];
@@ -350,10 +344,14 @@ describe('webcontainer SDK import guard (app/ tree)', () => {
     expect(dynamicFiles).toEqual(['lib/runtime/browser-runtime.ts']);
   });
 
-  it('pins auth.client.ts to its known single value re-export', async () => {
+  it('keeps zero value re-exports of the SDK anywhere in app/', async () => {
     const audit = await auditAppSources(APP_DIR);
 
-    expect(audit.referencesByFile['lib/webcontainer/auth.client.ts']).toEqual([{ kind: 'value-reexport', line: 6 }]);
+    const valueFiles = Object.keys(audit.referencesByFile).filter((file) =>
+      audit.referencesByFile[file].some((reference) => reference.kind === 'value-reexport'),
+    );
+
+    expect(valueFiles).toEqual([]);
   });
 
   it('documents VITE_RUNTIME_BACKEND in .env.example', async () => {
