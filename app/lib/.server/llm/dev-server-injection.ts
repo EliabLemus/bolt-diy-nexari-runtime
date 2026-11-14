@@ -118,7 +118,14 @@ export function devServerInjection(content: string): string | null {
    * ponytail: guest python3 is verified present in the runtime image.
    */
   const command = !hasPackageJson
-    ? 'python3 -m http.server 5173 --bind 0.0.0.0'
+    ? /*
+       * The guest fs is SHARED across chats: a python server from a previous
+       * chat keeps port 5173 bound, so the new server exits EADDRINUSE and the
+       * preview keeps serving stale content. Reboot it via pidfile.
+       * ponytail: pidfile only covers the static path; npm-path servers that
+       * orphan vite children need per-port tracking if it ever bites.
+       */
+      'old=$(cat /tmp/.nexari-dev.pid 2>/dev/null); [ -n "$old" ] && kill -9 "$old" 2>/dev/null; python3 -m http.server 5173 --bind 0.0.0.0 & echo $! > /tmp/.nexari-dev.pid; wait'
     : hasDevScript
       ? 'npm install && npm run dev -- --host 0.0.0.0 --port 5173'
       : 'npm install && npx --yes serve -l 5173 .';
