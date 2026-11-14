@@ -3,7 +3,7 @@ import { RuntimeConfigurationError, resolveRuntimeBackend } from './runtime-sele
 
 describe('resolveRuntimeBackend', () => {
   it('keeps StackBlitz as the baseline when no backend is configured', () => {
-    expect(resolveRuntimeBackend(undefined)).toBe('stackblitz');
+    expect(resolveRuntimeBackend(undefined)).toBe('nexari'); // default flipped: Nexari is the execution backend
   });
 
   it('selects Nexari only when explicitly requested', () => {

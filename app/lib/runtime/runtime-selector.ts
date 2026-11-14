@@ -10,12 +10,14 @@ export class RuntimeConfigurationError extends Error {
 /**
  * Resolve the backend from an explicit public configuration value.
  *
- * Absence deliberately preserves the historical StackBlitz runtime. Unknown
- * values fail closed so a typo cannot silently change the execution backend.
+ * Absence defaults to the Nexari runtime (the project's execution backend —
+ * StackBlitz was the historical default and is kept only as an explicit
+ * opt-in). Unknown values fail closed so a typo cannot silently change the
+ * execution backend.
  */
 export function resolveRuntimeBackend(value: string | undefined): RuntimeBackend {
   if (value === undefined || value === '') {
-    return 'stackblitz';
+    return 'nexari';
   }
 
   if (value === 'stackblitz' || value === 'nexari') {
