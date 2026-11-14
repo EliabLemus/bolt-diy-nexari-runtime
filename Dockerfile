@@ -18,7 +18,9 @@ ARG VITE_PUBLIC_APP_URL
 ENV VITE_PUBLIC_APP_URL=${VITE_PUBLIC_APP_URL}
 
 # Install deps efficiently
+# vendor tarballs (nexari-browser-stack) must exist before fetch: the lockfile references file: deps
 COPY package.json pnpm-lock.yaml* ./
+COPY vendor ./vendor
 RUN pnpm fetch
 
 # Copy source and build

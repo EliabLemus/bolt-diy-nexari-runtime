@@ -108,6 +108,8 @@ jobs:
         uses: ./.github/actions/setup-and-build
 
       - name: Start server for Lighthouse
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           pnpm run build
           pnpm run start &
