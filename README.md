@@ -11,6 +11,28 @@ Nexari es un IDE de desarrollo en el navegador que **genera y corre proyectos en
 - Los archivos se escriben en un filesystem virtual y se **ejecutan en vivo** vía el runtime [Vivari](https://github.com/EliabLemus) (wasm/browser stack): preview montado en el workbench y terminal visible del proceso en ejecución.
 - Todo corre en local: el modelo (Ollama), el runtime y la build.
 
+## Por qué Nexari
+
+El "genera y corre en el navegador" está comercialmente probado ([bolt.new](https://sacra.com/c/bolt-new/) llegó a $40M ARR en meses con ese modelo), pero los productos que lo dominan ejecutan tu código en su nube. Nexari toma la misma idea y la lleva **a tu máquina**:
+
+| | bolt.new / v0 / Lovable | bolt.diy (WebContainers) | **Nexari** |
+|---|---|---|---|
+| Ejecución | nube del proveedor | navegador (runtime propietario, licencia comercial) | navegador (**runtime open-source propio**) |
+| Tu código | sale de tu equipo | se ejecuta con SDK licenciado | **nunca sale de tu máquina** |
+| Offline / air-gapped | no | parcial | **sí (LLM local + runtime local)** |
+| Costo de sandbox | pago por uso | licencia enterprise en producción | **$0, sin vendor lock** |
+
+### Casos de uso
+
+- **Prototipado privado** — equipos que no pueden enviar código a APIs de nube (firewalls, datos sensibles, entornos regulados): LLM local + ejecución local, cero datos salen.
+- **Probar LLMs locales en modo agente** — el ecosistema Ollama (~200k+ instancias desplegadas) sirve para chatear; Nexari es el IDE donde esos modelos **generan y ejecutan** proyectos completos.
+- **Demos y apps desechables** — el patrón que bolt.new validó con millones de usuarios, sin cuentas ni cuotas.
+- **Educación** — entornos de código en el navegador sin setup y sin costos de sandbox en la nube por alumno.
+
+### Posición honesta
+
+Es un producto de **nicho**, no un competidor generalista de bolt.new/Lovable. El diferenciador real es el runtime propio ([Vivari](https://github.com/EliabLemus)) 100% open-source — sin la licencia comercial que ata a WebContainers API — combinado con privacidad extremo a extremo. Alternativas WASM de Linux-completo (container2wasm, jslinux) existen pero son emulación lenta sin IDE integrado.
+
 ## Requisitos
 
 - Node 22
