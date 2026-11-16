@@ -41,6 +41,30 @@ const WASM_SAFE_PIPELINE_STEPS: readonly string[] = [
 const WASM_SAFE_PIPELINE_INSTALL: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
 const WASM_SAFE_PIPELINE_START: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
 
+/**
+ * The guest ships pnpm (vendored, --package-import-method=copy) and npm, so
+ * `pnpm install` runs a pnpm pipeline. pnpm uses pnpm-lock, so the lockfile
+ * must be consistent before installing: `pnpm import` from package-lock.json
+ * when no pnpm-lock exists. The wasm rebuild/swap steps mirror the npm
+ * pipeline; `pnpm add` lacks `--no-save`, so the wasm builds land as
+ * devDependencies (lockfile stays consistent, unlike a stray npm install).
+ */
+const PNPM_SAFE_LOCKFILE_STEP =
+  `node -e "const fs=require('fs'); if(!fs.existsSync('pnpm-lock.yaml')&&fs.existsSync('package-lock.json')) ` +
+  `require('child_process').execSync('pnpm import',{stdio:'inherit'})"`;
+const PNPM_SAFE_INSTALL_STEP = 'pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund';
+const PNPM_SAFE_WASM_BUILDS_STEP = 'pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node';
+const PNPM_SAFE_PIPELINE_STEPS: readonly string[] = [
+  PNPM_SAFE_LOCKFILE_STEP,
+  PNPM_SAFE_INSTALL_STEP,
+  PNPM_SAFE_WASM_BUILDS_STEP,
+  WASM_SAFE_ROLLUP_SWAP_STEP,
+  WASM_SAFE_ESBUILD_SWAP_STEP,
+];
+
+/** First step of either install pipeline: marks that an install already ran. */
+const INSTALL_PIPELINE_HEADS = new Set([WASM_SAFE_INSTALL_STEP, PNPM_SAFE_LOCKFILE_STEP]);
+
 /** Bundlers whose native postinstalls fail on wasm32 and need the wasm rebuild. */
 const NATIVE_BINARY_PACKAGES = new Set(['vite', 'rollup', 'esbuild', 'webpack', 'parcel', 'turbopack']);
 
@@ -58,9 +82,9 @@ function stripVersion(pkg: string): string {
  * list of shell steps to run, or `null` when the command is not a project
  * install/start command (it then executes raw, untouched).
  *
- * Pure string-mapping only: flags and package-manager variants (`pnpm`,
- * `yarn`, `--legacy-peer-deps`, compound `install && run dev`) normalize to
- * the exact same tested pipeline.
+ * Pure string-mapping only: flags and package-manager variants (`yarn`,
+ * `--legacy-peer-deps`, compound `install && run dev`) normalize to
+ * the exact same tested pipeline; `pnpm install` maps to the pnpm pipeline.
  */
 export function rewriteWasmSafeCommand(command: string): string[] | null {
   const normalized = normalize(command);
@@ -89,8 +113,8 @@ export function rewriteWasmSafeCommand(command: string): string[] | null {
      * The run pipeline starts with the install pipeline; when a bare install
      * was already emitted by an earlier segment, only append the run step.
      */
-    if (mapped[0] === WASM_SAFE_INSTALL_STEP && steps[0] === WASM_SAFE_INSTALL_STEP) {
-      steps.push(...mapped.slice(WASM_SAFE_PIPELINE_STEPS.length));
+    if (INSTALL_PIPELINE_HEADS.has(mapped[0]) && INSTALL_PIPELINE_HEADS.has(steps[0])) {
+      steps.push(mapped[mapped.length - 1]);
     } else {
       steps.push(...mapped);
     }
@@ -104,17 +128,21 @@ export function rewriteWasmSafeCommand(command: string): string[] | null {
  * segment is not a recognized project install/run command.
  */
 function mapWasmSafeSegment(segment: string): string[] | null {
-  // The guest ships npm only; pnpm/yarn rewrite to the npm pipeline.
-  const rewritten = segment.replace(/^(pnpm|yarn)(\s+)/, 'npm$2');
+  /* The guest ships pnpm (vendored, --package-import-method=copy) and npm; yarn still rewrites to the npm pipeline. */
+  const rewritten = segment.replace(/^yarn(\s+)/, 'npm$1');
 
-  const runMatch = /^npm run (dev|build|preview)( -- .+)?$/.exec(rewritten);
+  const runMatch = /^(npm|pnpm) run (dev|build|preview)( -- .+)?$/.exec(rewritten);
 
   if (runMatch !== null) {
     // The full 4-step start sequence, with the model's flags preserved on the final step.
-    return [...WASM_SAFE_PIPELINE_START, `npm run ${runMatch[1]}${runMatch[2] ?? ''}`];
+    return [...WASM_SAFE_PIPELINE_START, `npm run ${runMatch[2]}${runMatch[3] ?? ''}`];
   }
 
   const tokens = rewritten.split(' ');
+
+  if (tokens[0] === 'pnpm' && (tokens[1] === 'install' || tokens[1] === 'i' || tokens[1] === 'ci')) {
+    return [...PNPM_SAFE_PIPELINE_STEPS];
+  }
 
   if (tokens[0] !== 'npm' || !(tokens[1] === 'install' || tokens[1] === 'i' || tokens[1] === 'ci')) {
     return null;

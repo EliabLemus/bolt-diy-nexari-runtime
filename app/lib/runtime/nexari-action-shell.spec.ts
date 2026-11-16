@@ -199,9 +199,22 @@ describe('rewriteWasmSafeCommand', () => {
     expect(pipeline).toEqual([...rewriteWasmSafeCommand('npm run build')!, 'npm run preview']);
   });
 
-  it('rewrites pnpm/yarn to the npm pipeline (the guest has no pnpm/yarn)', () => {
-    expect(rewriteWasmSafeCommand('pnpm install')).toEqual(rewriteWasmSafeCommand('npm install'));
+  it('maps pnpm install to the pnpm pipeline; yarn still rewrites to npm', () => {
+    const pipeline = rewriteWasmSafeCommand('pnpm install');
+    expect(pipeline).not.toEqual(rewriteWasmSafeCommand('npm install'));
+    expect(pipeline).toHaveLength(5);
+    expect(pipeline![0]).toContain("fs.existsSync('pnpm-lock.yaml')");
+    expect(pipeline![0]).toContain("execSync('pnpm import'");
+    expect(pipeline![1]).toBe('pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund');
+    expect(pipeline![2]).toBe('pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
+    expect(rewriteWasmSafeCommand('pnpm i')).toEqual(pipeline);
     expect(rewriteWasmSafeCommand('yarn install && yarn run dev')).toEqual(rewriteWasmSafeCommand('npm run dev'));
+  });
+
+  it('appends only the run step when a pnpm install already ran in a compound command', () => {
+    const pipeline = rewriteWasmSafeCommand('pnpm install && pnpm run dev');
+    expect(pipeline).toHaveLength(6);
+    expect(pipeline![5]).toBe('npm run dev');
   });
 
   it('returns null for non-project commands', () => {
@@ -369,11 +382,10 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const shell = createNexariActionShell(runtime);
     const { output } = (await shell.executeCommand('session-1', 'pnpm install'))!;
 
-    expect(output).toContain('npm install --ignore-scripts --prefer-offline --no-audit --no-fund');
-    expect(output).toContain('esbuild-wasm@0.28.2 @rollup/wasm-node');
-    expect(output).toContain('$ npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
-    expect(output).not.toContain('pnpm install\n');
-    expect(runActionCommandStreaming).toHaveBeenCalledTimes(4);
+    expect(output).toContain('pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund');
+    expect(output).toContain('$ pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
+    expect(output).not.toContain('$ pnpm install\n');
+    expect(runActionCommandStreaming).toHaveBeenCalledTimes(5);
   });
 
   it('stops at the first failing step and returns that step exit code', async () => {
