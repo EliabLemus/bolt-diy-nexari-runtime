@@ -1,3 +1,7 @@
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createNexariRuntime, NexariRuntimeTerminatedError } from './nexari-runtime';
 import { createNexariActionShell, rewriteWasmSafeCommand } from './nexari-action-shell';
@@ -205,16 +209,130 @@ describe('rewriteWasmSafeCommand', () => {
     expect(pipeline).toHaveLength(5);
     expect(pipeline![0]).toContain("fs.existsSync('pnpm-lock.yaml')");
     expect(pipeline![0]).toContain("execSync('pnpm import'");
-    expect(pipeline![1]).toBe('pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund');
+    expect(pipeline![1]).toBe('pnpm install --ignore-scripts --prefer-offline');
     expect(pipeline![2]).toBe('pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(rewriteWasmSafeCommand('pnpm i')).toEqual(pipeline);
     expect(rewriteWasmSafeCommand('yarn install && yarn run dev')).toEqual(rewriteWasmSafeCommand('npm run dev'));
   });
 
+  it('uses only pnpm-valid flags: no npm-only --no-audit/--no-fund anywhere in the pnpm pipeline', () => {
+    const pipeline = rewriteWasmSafeCommand('pnpm install')!;
+
+    expect(pipeline[1]).toBe('pnpm install --ignore-scripts --prefer-offline');
+
+    for (const step of pipeline) {
+      expect(step).not.toContain('--no-audit');
+      expect(step).not.toContain('--no-fund');
+    }
+  });
+
+  it('keeps requested packages: pnpm install <pkgs> maps to pnpm add <pkgs> (version and scoped)', () => {
+    expect(rewriteWasmSafeCommand('pnpm install lodash@4 @scope/pkg')).toEqual([
+      'pnpm add lodash@4 @scope/pkg --ignore-scripts',
+    ]);
+    expect(rewriteWasmSafeCommand('pnpm i lodash@4')).toEqual(['pnpm add lodash@4 --ignore-scripts']);
+    expect(rewriteWasmSafeCommand('pnpm install @scope/pkg')).toEqual(['pnpm add @scope/pkg --ignore-scripts']);
+
+    // Not equivalent to a bare pnpm install (which would drop the packages).
+    expect(rewriteWasmSafeCommand('pnpm install lodash@4 @scope/pkg')).not.toEqual(
+      rewriteWasmSafeCommand('pnpm install'),
+    );
+
+    // Native bundler still triggers the wasm swap steps, package preserved.
+    expect(rewriteWasmSafeCommand('pnpm install vite@7')).toEqual([
+      'pnpm add vite@7 --ignore-scripts',
+      'pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node',
+      expect.stringContaining('fs.cpSync'),
+      expect.stringContaining('fs.cpSync'),
+    ]);
+  });
+
+  it('maps a standalone pnpm run dev to the FULL pnpm pipeline, in order, with pnpm run dev last', () => {
+    const pipeline = rewriteWasmSafeCommand('pnpm run dev');
+
+    expect(pipeline).toHaveLength(6);
+    expect(pipeline![0]).toContain("fs.existsSync('pnpm-lock.yaml')");
+    expect(pipeline![0]).toContain("execSync('pnpm import'");
+    expect(pipeline![1]).toBe('pnpm install --ignore-scripts --prefer-offline');
+    expect(pipeline![2]).toBe('pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
+    expect(pipeline![3]).toBe(rewriteWasmSafeCommand('pnpm install')![3]); // rollup swap
+    expect(pipeline![4]).toBe(rewriteWasmSafeCommand('pnpm install')![4]); // esbuild swap
+    expect(pipeline![5]).toBe('pnpm run dev');
+
+    // No npm anywhere in the pnpm run pipeline.
+    for (const step of pipeline!) {
+      expect(step.startsWith('npm')).toBe(false);
+    }
+
+    expect(rewriteWasmSafeCommand('pnpm run build')?.at(-1)).toBe('pnpm run build');
+    expect(rewriteWasmSafeCommand('pnpm run preview')?.at(-1)).toBe('pnpm run preview');
+  });
+
+  it('swap steps reach the pnpm isolated layout: no native rollup/esbuild copy survives under node_modules/**', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pnpm-layout-'));
+
+    try {
+      // pnpm isolated layout: real copies under .pnpm, symlinks at the top level.
+      const nativeRollup = path.join(tmp, 'node_modules/.pnpm/rollup@4.52.5/node_modules/rollup');
+      const nativeEsbuild = path.join(tmp, 'node_modules/.pnpm/esbuild@0.28.2/node_modules/esbuild');
+      fs.mkdirSync(path.join(nativeRollup, 'bin'), { recursive: true });
+      fs.mkdirSync(path.join(nativeEsbuild, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(nativeRollup, 'bin/rollup'), 'native-binary-marker');
+      fs.writeFileSync(path.join(nativeEsbuild, 'bin/esbuild'), 'native-binary-marker');
+      fs.mkdirSync(path.join(tmp, 'node_modules/@rollup/wasm-node'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'node_modules/esbuild-wasm'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'node_modules/@rollup/wasm-node/wasm.js'), 'wasm-marker');
+      fs.writeFileSync(path.join(tmp, 'node_modules/esbuild-wasm/wasm.js'), 'wasm-marker');
+      fs.symlinkSync(nativeRollup, path.join(tmp, 'node_modules/rollup'), 'dir');
+      fs.symlinkSync(nativeEsbuild, path.join(tmp, 'node_modules/esbuild'), 'dir');
+
+      const pipeline = rewriteWasmSafeCommand('pnpm install')!;
+
+      for (const step of pipeline.filter((candidate) => candidate.includes('fs.cpSync'))) {
+        execSync(step, { cwd: tmp });
+      }
+
+      // Grep post-swap: no native bin/ marker survives anywhere under node_modules.
+      const survivors: string[] = [];
+
+      const grep = (dir: string) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+
+          if (entry.isDirectory() || entry.isSymbolicLink()) {
+            try {
+              if (fs.statSync(full).isDirectory()) {
+                grep(full);
+              }
+            } catch {
+              // dangling symlink: nothing to inspect
+            }
+
+            continue;
+          }
+
+          if (fs.readFileSync(full, 'utf8').includes('native-binary-marker')) {
+            survivors.push(full);
+          }
+        }
+      };
+
+      grep(path.join(tmp, 'node_modules'));
+      expect(survivors).toEqual([]);
+
+      // And the swapped copies ARE the wasm build.
+      expect(fs.readFileSync(path.join(nativeRollup, 'wasm.js'), 'utf8')).toBe('wasm-marker');
+      expect(fs.readFileSync(path.join(nativeEsbuild, 'wasm.js'), 'utf8')).toBe('wasm-marker');
+      expect(fs.existsSync(path.join(tmp, 'node_modules/rollup/wasm.js'))).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('appends only the run step when a pnpm install already ran in a compound command', () => {
     const pipeline = rewriteWasmSafeCommand('pnpm install && pnpm run dev');
     expect(pipeline).toHaveLength(6);
-    expect(pipeline![5]).toBe('npm run dev');
+    expect(pipeline![5]).toBe('pnpm run dev');
   });
 
   it('returns null for non-project commands', () => {
@@ -382,7 +500,7 @@ describe('createNexariActionShell wasm-safe rewriting', () => {
     const shell = createNexariActionShell(runtime);
     const { output } = (await shell.executeCommand('session-1', 'pnpm install'))!;
 
-    expect(output).toContain('pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund');
+    expect(output).toContain('pnpm install --ignore-scripts --prefer-offline');
     expect(output).toContain('$ pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node');
     expect(output).not.toContain('$ pnpm install\n');
     expect(runActionCommandStreaming).toHaveBeenCalledTimes(5);

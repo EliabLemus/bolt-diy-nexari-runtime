@@ -11,10 +11,27 @@ import type { NexariBrowserRuntime } from './nexari-runtime-facade';
  */
 const WASM_SAFE_INSTALL_STEP = 'npm install --ignore-scripts --prefer-offline --no-audit --no-fund';
 const WASM_SAFE_WASM_BUILDS_STEP = 'npm install --no-save --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node';
-const WASM_SAFE_ROLLUP_SWAP_STEP =
-  `node -e "const fs=require('fs'); ` +
-  `fs.rmSync('node_modules/rollup',{recursive:true,force:true}); ` +
-  `fs.cpSync('node_modules/@rollup/wasm-node','node_modules/rollup',{recursive:true})"`;
+
+/**
+ * Swap EVERY copy of `pkg` under node_modules for `source` (the wasm build).
+ * pnpm's isolated layout places real package copies at
+ * `node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>` (plus symlinks at
+ * `node_modules/<pkg>`), so a single top-level rm/cp misses the copies Vite
+ * actually resolves. The walk replaces every directory named `pkg` in the
+ * whole tree and stops descending into replaced copies.
+ */
+function wasmSafeSwapStep(pkg: string, source: string): string {
+  return (
+    `node -e "const fs=require('fs'),path=require('path'); ` +
+    `const walk=(dir)=>{let entries;try{entries=fs.readdirSync(dir,{withFileTypes:true})}catch(e){return} ` +
+    `for(const entry of entries){const full=path.join(dir,entry.name); ` +
+    `if(entry.name==='${pkg}'){fs.rmSync(full,{recursive:true,force:true});fs.cpSync('${source}',full,{recursive:true});continue;} ` +
+    `let stat=null;try{stat=fs.statSync(full)}catch(e){} ` +
+    `if(stat!==null&&stat.isDirectory()){walk(full);}}};walk('node_modules')"`
+  );
+}
+
+const WASM_SAFE_ROLLUP_SWAP_STEP = wasmSafeSwapStep('rollup', 'node_modules/@rollup/wasm-node');
 
 /**
  * esbuild must resolve to its WebAssembly build in the guest: the vendored
@@ -26,10 +43,7 @@ const WASM_SAFE_ROLLUP_SWAP_STEP =
  * rollup swap so `require('esbuild')` (vite's dependency) loads the wasm
  * build the runtime knows how to patch.
  */
-const WASM_SAFE_ESBUILD_SWAP_STEP =
-  `node -e "const fs=require('fs'); ` +
-  `fs.rmSync('node_modules/esbuild',{recursive:true,force:true}); ` +
-  `fs.cpSync('node_modules/esbuild-wasm','node_modules/esbuild',{recursive:true})"`;
+const WASM_SAFE_ESBUILD_SWAP_STEP = wasmSafeSwapStep('esbuild', 'node_modules/esbuild-wasm');
 
 const WASM_SAFE_PIPELINE_STEPS: readonly string[] = [
   WASM_SAFE_INSTALL_STEP,
@@ -52,7 +66,7 @@ const WASM_SAFE_PIPELINE_START: readonly string[] = WASM_SAFE_PIPELINE_STEPS;
 const PNPM_SAFE_LOCKFILE_STEP =
   `node -e "const fs=require('fs'); if(!fs.existsSync('pnpm-lock.yaml')&&fs.existsSync('package-lock.json')) ` +
   `require('child_process').execSync('pnpm import',{stdio:'inherit'})"`;
-const PNPM_SAFE_INSTALL_STEP = 'pnpm install --ignore-scripts --prefer-offline --no-audit --no-fund';
+const PNPM_SAFE_INSTALL_STEP = 'pnpm install --ignore-scripts --prefer-offline';
 const PNPM_SAFE_WASM_BUILDS_STEP = 'pnpm add -D --ignore-scripts esbuild-wasm@0.28.2 @rollup/wasm-node';
 const PNPM_SAFE_PIPELINE_STEPS: readonly string[] = [
   PNPM_SAFE_LOCKFILE_STEP,
@@ -134,14 +148,42 @@ function mapWasmSafeSegment(segment: string): string[] | null {
   const runMatch = /^(npm|pnpm) run (dev|build|preview)( -- .+)?$/.exec(rewritten);
 
   if (runMatch !== null) {
-    // The full 4-step start sequence, with the model's flags preserved on the final step.
-    return [...WASM_SAFE_PIPELINE_START, `npm run ${runMatch[2]}${runMatch[3] ?? ''}`];
+    // The full install pipeline plus the model's run target, on its own manager.
+    const pipeline = runMatch[1] === 'pnpm' ? PNPM_SAFE_PIPELINE_STEPS : WASM_SAFE_PIPELINE_START;
+
+    return [...pipeline, `${runMatch[1]} run ${runMatch[2]}${runMatch[3] ?? ''}`];
   }
 
   const tokens = rewritten.split(' ');
 
   if (tokens[0] === 'pnpm' && (tokens[1] === 'install' || tokens[1] === 'i' || tokens[1] === 'ci')) {
-    return [...PNPM_SAFE_PIPELINE_STEPS];
+    const rest = tokens.slice(2);
+    const packages = rest.filter((token) => !token.startsWith('-'));
+
+    if (packages.length === 0) {
+      return [...PNPM_SAFE_PIPELINE_STEPS];
+    }
+
+    /*
+     * `pnpm install <pkgs>` is not a bare install: collapsing it would drop
+     * the requested packages. Map to `pnpm add <pkgs>` with the wasm-safe
+     * flags (pnpm has no `--no-save`; `add` persists to package.json, which
+     * keeps the lockfile consistent).
+     */
+    const deduped = packages.filter((pkg) => {
+      const name = stripVersion(pkg);
+
+      return name !== 'esbuild' && name !== 'esbuild-wasm' && name !== '@rollup/wasm-node';
+    });
+    const needsWasm = packages.some((pkg) => NATIVE_BINARY_PACKAGES.has(stripVersion(pkg)));
+
+    const addStep = deduped.length > 0 ? `pnpm add ${deduped.join(' ')} --ignore-scripts` : PNPM_SAFE_INSTALL_STEP;
+
+    if (needsWasm) {
+      return [addStep, PNPM_SAFE_WASM_BUILDS_STEP, WASM_SAFE_ROLLUP_SWAP_STEP, WASM_SAFE_ESBUILD_SWAP_STEP];
+    }
+
+    return [addStep];
   }
 
   if (tokens[0] !== 'npm' || !(tokens[1] === 'install' || tokens[1] === 'i' || tokens[1] === 'ci')) {
@@ -185,7 +227,7 @@ function mapWasmSafeSegment(segment: string): string[] | null {
  * detached on the facade spawn lane and resolve as soon as the server is
  * actually serving (server-ready event, ready output, or an open port).
  */
-const SERVER_STEP_PATTERN = /^npm run (dev|preview|start)( -- .+)?$/;
+const SERVER_STEP_PATTERN = /^(npm|pnpm) run (dev|preview|start)( -- .+)?$/;
 const SERVER_OUTPUT_READY_PATTERN =
   /(local:|ready in|listening|server running|started server|https?:\/\/[^\s]+\.\S+:\d+)/i;
 const SERVER_STEP_TIMEOUT_MS = 30_000;
